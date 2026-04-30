@@ -1,0 +1,12 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+
+# Virtual environment
+.env
+.venv/
+venv/
+.python-version
+
+# OS cruft
+.DS_Store
