@@ -7,6 +7,7 @@ Sends fragmented encoded SCHC packets via loopback UDP.
 
 import socket
 import math
+import time
 
 from config import *
 
@@ -80,11 +81,13 @@ class StreamEncoder:
 class StreamFragmenter:
     """Stream encoding geometry assembler and fragmenter for ARQ-FEC."""
 
-    def __init__(self, window_size: int, tile_size_bits: int,
-                 interleaving_depth: int = 0):
+    def __init__(self, window_size: int, tile_size_bits: int, w_field_size: int,
+                 interleaving_depth: int = 0, ):
         self.window_size = window_size
         self.tile_size_bits = tile_size_bits
         self.tile_size_bytes = tile_size_bits // 8
+        self.w_field_size = w_field_size
+        self.fcn_field_size = max(1, math.ceil(math.log2(self.window_size)))
         self.interleaving_depth = interleaving_depth
 
     def iter_interleaved_indices(self, num_tiles: int):
@@ -283,6 +286,7 @@ def main():
     fragmenter = StreamFragmenter(
         window_size=WINDOW_SIZE,
         tile_size_bits=TILE_SIZE,
+        w_field_size=W_FIELD_SIZE,
         interleaving_depth=INTERLEAVING_DEPTH
     )
 
@@ -337,7 +341,7 @@ def main():
     # C-like procedure
     # ----------------
 
-    print(f"\n[6] Fragments payload from C-Stream (MTU={MTU_SIZE_BYTES}):")
+    print(f"\n[6] Fragments payload from C-Stream:")
 
     fragments = []
     
@@ -360,6 +364,47 @@ def main():
 
     for i in range(len(fragments)):
         assert fragments[i] == visual_procedure_fragments[i]
+
+    print(f"\n[7] Transmitting windows via loopback UDP...")
+
+    for fragment in fragmenter.iter_fragments(
+        cstream_size=cstream_size,
+        mtu=MTU_SIZE_BYTES
+    ):
+        # Form the header (W, FCN): integrate in `iter_fragments()`?
+        _, w, fcn = fragment[0]
+
+        # get field sizes (ints)
+        w_bits = fragmenter.w_field_size
+        fcn_bits = fragmenter.fcn_field_size
+        total_bits = w_bits + fcn_bits
+        total_bytes = (total_bits + 7) // 8
+
+        # pack w (most-significant within header) then fcn into an integer
+        header_int = (w << fcn_bits) | (fcn & ((1 << fcn_bits) - 1))
+
+        # convert header_int to bytes big-endian, sized to total_bytes
+        header_bytes = header_int.to_bytes(total_bytes, byteorder="big")
+
+        # if total_bits doesn't align to whole bytes, header_bytes include
+        # leading zeros; that's fine — receiver must know field sizes.
+        packet = bytearray()
+        packet.extend(header_bytes)
+
+        for idx, _, _ in fragment:
+            sym = encoder.get_encoded_symbol(
+                SCHC_PACKET,
+                idx * encoder.symbol_size_bytes
+            )
+            packet.extend(sym)
+
+        # Send this fragment to app. server
+        print(f"   TX:", packet.hex())
+        sock.sendto(packet, (IP_ADDR, APP_PORT))
+        time.sleep(0.01) # Small delay between windows
+
+        # Send All-1
+        # ...
 
 
 if __name__ == "__main__":

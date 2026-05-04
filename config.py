@@ -6,7 +6,8 @@ SYMBOL_SIZE_BITS = 8          # m = 8 bits (1 byte per symbol)
 SOURCE_BLOCK_SIZE = 2         # k = 2 source symbols per block
 ENCODED_BLOCK_SIZE = 3        # n = 3 encoded symbols per block (k source + 1 parity)
 
-WINDOW_SIZE = 7               # tiles per window
+WINDOW_SIZE = 7               # tiles per window (determines FCN field size)
+W_FIELD_SIZE = 5              # "M" bits; make M+FCN byte-aligned
 TILE_SIZE = SYMBOL_SIZE_BITS  # bits per tile
 INTERLEAVING_DEPTH = 3        # depth for interleaving
 
