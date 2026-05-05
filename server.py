@@ -69,18 +69,28 @@ class StreamReassembler:
         fcn = header_int & ((1 << fcn_bits) - 1)
 
         return w, fcn, data[total_bytes:]
+    
+    def get_tile_index(self, w: int, fcn: int) -> int:
+        """Convert W:FCN to flat tile index in the C-Stream."""
+        return (w + 1) * self.window_size - fcn - 1
 
     def place_tiles(self, w: int, fcn: int, tiles: bytes) -> None:
-        """Place tiles starting at w:fcn into the C-Stream."""
+        """Place tiles from a received fragment into the C-Stream.
 
+        The first tile is located at the position derived from W:FCN.
+        Subsequent tiles are placed at interleaved stride intervals.
+        """
         step = self.tile_size_bytes
-        # read the tiles in step.
-        # extract that tile from the tiles
-        # calculate the position in the cstream (use window size)
-        #   the first tile is w:fcn, but then we reduce fcn by interleaving depth
-        # put it in the cstream in the calculated position (1 tile contains x bits/bytes)
-        #pos = index * self.tile_size_bytes # 1 tile contains x bits (bytes)
+        num_tiles = len(tiles) // step
+        base_index = self.get_tile_index(w, fcn)
+        stride = self.interleaving_depth if self.interleaving_depth > 1 else 1
 
+        # Extract and place each tile at its corresponding position
+        for tile_offset in range(num_tiles):
+            start = tile_offset * step
+            tile_bytes = tiles[start:start+step]
+            tile_index = base_index + tile_offset * stride
+            self.cstream.put_data(index=tile_index, data=tile_bytes)
 
 def main():
     """Main function for the ARQ-FEC application server (receiver)."""
@@ -135,10 +145,12 @@ def main():
                 w, fcn, payload = reassembler.parse_fragment(packet)
                 print(f"   w={w}, fcn={fcn}, payload={payload.hex()}")
 
-                if fcn == WINDOW_SIZE:
-                    print("   Received ALL-1 fragment!")
+                if fcn < WINDOW_SIZE:
+                    # Process regular fragments
+                    reassembler.place_tiles(w, fcn, payload)
 
-                reassembler.place_tiles(w, fcn, payload)
+                else:
+                    print("   Received ALL-1 fragment!")
 
             except socket.timeout:
                 print("   Timeout reached - no more packets expected")
