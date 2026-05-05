@@ -19,4 +19,4 @@ IP_ADDR = "127.0.0.1"         # Loopback IP
 DEV_PORT = 5004               # UDP port for Device
 APP_PORT = 5005               # UDP port for App Server
 RX_TIMEOUT = 5                # Server timeout
-RX_BUFFER_SIZE = 5            # Server reception buffer size
+RX_BUFFER_SIZE = 255          # Server reception buffer size (MTU?)
