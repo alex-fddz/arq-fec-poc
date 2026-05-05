@@ -8,6 +8,7 @@ Sends fragmented encoded SCHC packets via loopback UDP.
 import socket
 import math
 import time
+import zlib
 
 from config import *
 
@@ -82,7 +83,7 @@ class StreamFragmenter:
     """Stream encoding geometry assembler and fragmenter for ARQ-FEC."""
 
     def __init__(self, window_size: int, tile_size_bits: int, w_field_size: int,
-                 interleaving_depth: int = 0, ):
+                 interleaving_depth: int = 0):
         self.window_size = window_size
         self.tile_size_bits = tile_size_bits
         self.tile_size_bytes = tile_size_bits // 8
@@ -217,6 +218,32 @@ class StreamFragmenter:
         # final flush if non-empty
         if current_fragment:
             yield current_fragment, current_frag_header
+    
+    def new_fragment(self, w: int, fcn: int) -> bytes:
+        """Make a fragment with header bytes."""
+
+        # get field sizes (ints)
+        w_bits = self.w_field_size
+        fcn_bits = self.fcn_field_size
+        total_bits = w_bits + fcn_bits
+        total_bytes = (total_bits + 7) // 8
+
+        # pack w (most-significant within header) then fcn into an integer
+        header_int = (w << fcn_bits) | (fcn & ((1 << fcn_bits) - 1))
+
+        # convert header_int to bytes big-endian, sized to total_bytes
+        header_bytes = header_int.to_bytes(total_bytes, byteorder="big")
+
+        # if total_bits doesn't align to whole bytes, header_bytes include
+        # leading zeros; that's fine — receiver must know field sizes.
+        packet = bytearray()
+        packet.extend(header_bytes)
+        return packet
+    
+    def calculate_crc32(self, data: bytes) -> bytes:
+        """Return CRC-32 (poly 0xEDB88320) for given data."""
+        val = zlib.crc32(data) & 0xFFFFFFFF
+        return val.to_bytes(4, "big")
 
 # =============================================================================
 # M A I N
@@ -303,7 +330,6 @@ def main():
 
     assert len(windows_tiles) == math.ceil(
         (len(SCHC_PACKET) * 3 // 2) / WINDOW_SIZE)
-    # assert len(windows_tiles) == 9 # 58/7
     assert len(windows_tiles[0]) == WINDOW_SIZE
 
     print("\n[4] Flatten & apply interleaving:")
@@ -365,7 +391,7 @@ def main():
     for i in range(len(fragments)):
         assert fragments[i] == visual_procedure_fragments[i]
 
-    print(f"\n[7] Transmitting windows via loopback UDP...")
+    print(f"\n[7] Transmitting fragments via loopback UDP...")
 
     for fragment in fragmenter.iter_fragments(
         cstream_size=cstream_size,
@@ -374,22 +400,7 @@ def main():
         # Form the header (W, FCN): integrate in `iter_fragments()`?
         _, w, fcn = fragment[0]
 
-        # get field sizes (ints)
-        w_bits = fragmenter.w_field_size
-        fcn_bits = fragmenter.fcn_field_size
-        total_bits = w_bits + fcn_bits
-        total_bytes = (total_bits + 7) // 8
-
-        # pack w (most-significant within header) then fcn into an integer
-        header_int = (w << fcn_bits) | (fcn & ((1 << fcn_bits) - 1))
-
-        # convert header_int to bytes big-endian, sized to total_bytes
-        header_bytes = header_int.to_bytes(total_bytes, byteorder="big")
-
-        # if total_bits doesn't align to whole bytes, header_bytes include
-        # leading zeros; that's fine — receiver must know field sizes.
-        packet = bytearray()
-        packet.extend(header_bytes)
+        packet = fragmenter.new_fragment(w, fcn)
 
         for idx, _, _ in fragment:
             sym = encoder.get_encoded_symbol(
@@ -403,8 +414,19 @@ def main():
         sock.sendto(packet, (IP_ADDR, APP_PORT))
         time.sleep(0.01) # Small delay between windows
 
-        # Send All-1
-        # ...
+    # Send All-1
+    num_tiles = cstream_size // fragmenter.tile_size_bytes
+    num_windows = (num_tiles // WINDOW_SIZE) # W of last tile
+
+    all1_packet = fragmenter.new_fragment(w=num_windows, fcn=WINDOW_SIZE)
+    rcs = fragmenter.calculate_crc32(data=SCHC_PACKET)
+    all1_packet.extend(rcs)
+
+    print(f"   TX:", all1_packet.hex())
+    sock.sendto(all1_packet, (IP_ADDR, APP_PORT))
+
+    # Now await for ACK
+    # ...
 
 
 if __name__ == "__main__":
