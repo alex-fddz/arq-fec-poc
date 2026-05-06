@@ -32,12 +32,53 @@ class StreamDecoder:
     """Stream encoding geometry decoder for ARQ-FEC."""
 
     def __init__(self, cstream: ReceptionCStream,
-                 symbol_size_bits: int, k: int, n: int):
+                 symbol_size_bits: int, k: int, n: int, tile_size_bits: int):
         self.cstream = cstream
         self.symbol_size_bits = symbol_size_bits
         self.symbol_size_bytes = symbol_size_bits // 8
         self.k = k  # source symbols per block
         self.n = n  # encoded symbols per block
+        self.symbols_per_tile = (tile_size_bits // 8) // self.symbol_size_bytes
+
+    def symbol_received(self, symbol_index: int) -> bool:
+        """Read the C-Stream bitmap to see if a symbol has been received."""
+        tile_index = symbol_index // self.symbols_per_tile
+        return (
+            self.cstream.bitmap[tile_index]
+            if tile_index < len(self.cstream.bitmap)
+            else False
+        )
+
+    def is_decodeable(self):
+        """Check k out of n in every encoded block of the C-Stream."""
+
+        symbols_in_cstream = len(self.cstream.bitmap) * self.symbols_per_tile
+        trailing_symbols = symbols_in_cstream % self.n
+
+        # Defensive check: legitimate trailing symbols are strictly < k
+        if trailing_symbols >= self.k:
+            return False
+
+        full_blocks_end = symbols_in_cstream - trailing_symbols
+
+        # Check complete/full blocks
+        for block_start in range(0, full_blocks_end, self.n):
+            symbols_received = sum(
+                1 for s in range(block_start, block_start + self.n)
+                if self.symbol_received(s)
+            )
+            if symbols_received < self.k:
+                return False
+
+        # Trailing symbols have no parity; all must be present
+        if trailing_symbols > 0:
+            symbols_received = sum(
+                1 for s in range(full_blocks_end, symbols_in_cstream)
+                if self.symbol_received(s)
+            )
+            if (symbols_received < trailing_symbols):
+                return False
+        return True
 
 class StreamReassembler:
     """Stream encoding geometry reassembler for ARQ-FEC."""
@@ -69,7 +110,7 @@ class StreamReassembler:
         fcn = header_int & ((1 << fcn_bits) - 1)
 
         return w, fcn, data[total_bytes:]
-    
+
     def get_tile_index(self, w: int, fcn: int) -> int:
         """Convert W:FCN to flat tile index in the C-Stream."""
         return (w + 1) * self.window_size - fcn - 1
@@ -114,7 +155,8 @@ def main():
         cstream=cstream,
         symbol_size_bits=SYMBOL_SIZE_BITS,
         k=SOURCE_BLOCK_SIZE,
-        n=ENCODED_BLOCK_SIZE
+        n=ENCODED_BLOCK_SIZE,
+        tile_size_bits=TILE_SIZE
     )
 
     print(f"Reassembler and Decoder sub-processes initialized.")
@@ -126,7 +168,7 @@ def main():
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind((IP_ADDR, APP_PORT))
     sock.settimeout(RX_TIMEOUT)  # Set timeout
-    
+
     print(f"Listening on {IP_ADDR}:{APP_PORT}")
     print(f"Waiting for fragmented SCHC packets...")
 
@@ -145,12 +187,22 @@ def main():
                 w, fcn, payload = reassembler.parse_fragment(packet)
                 print(f"   w={w}, fcn={fcn}, payload={payload.hex()}")
 
-                if fcn < WINDOW_SIZE:
-                    # Process regular fragments
-                    reassembler.place_tiles(w, fcn, payload)
+                is_all1 = (fcn == reassembler.window_size)
+
+                if is_all1:
+                    print("   Received ALL-1 fragment.")
 
                 else:
-                    print("   Received ALL-1 fragment!")
+                    # Process regular fragments
+                    reassembler.place_tiles(w, fcn, payload)
+                    print(f"   C-Stream> {cstream.buffer.hex()}")
+
+                # -- Decoding --------------------------------------------------
+
+                if (decoder.is_decodeable()):
+                    print("   ! C-Stream is decodeable !")
+                    # decode ?
+
 
             except socket.timeout:
                 print("   Timeout reached - no more packets expected")
