@@ -7,6 +7,7 @@ Receives fragmented encoded SCHC packets via loopback UDP and attempts reconstru
 
 import socket
 import math
+import zlib
 
 from config import *
 
@@ -79,6 +80,53 @@ class StreamDecoder:
             if (symbols_received < trailing_symbols):
                 return False
         return True
+
+    def decode(self) -> bytes:
+        """Decode the C-Stream assuming XOR-based parity (n = k + 1).
+        Does not mutate the C-Stream. Returns reconstructed SCHC packet."""
+
+        symbols_in_cstream = len(self.cstream.bitmap) * self.symbols_per_tile
+        full_blocks_end = symbols_in_cstream - (symbols_in_cstream % self.n)
+
+        result = bytearray()
+
+        # Process complete blocks
+        for block_start in range(0, full_blocks_end, self.n):
+            present = [
+                s for s in range(block_start, block_start + self.n)
+                if self.symbol_received(s)
+            ]
+
+            # Append the k source symbols (positions block_start .. block_start+k-1)
+            for src_pos in range(block_start, block_start + self.k):
+                if src_pos in present:
+                    start = src_pos * self.symbol_size_bytes
+                    result.extend(
+                        self.cstream.buffer[start:start + self.symbol_size_bytes]
+                    )
+                else:
+                    # Recover via XOR of all present symbols
+                    recovered = bytes(self.symbol_size_bytes)
+                    for p in present:
+                        s = p * self.symbol_size_bytes
+                        d = self.cstream.buffer[s:s + self.symbol_size_bytes]
+                        recovered = bytes(a ^ b for a, b in zip(recovered, d))
+                    result.extend(recovered)
+
+        # Append trailing source symbols as-is (no parity exists)
+        for src_pos in range(full_blocks_end, symbols_in_cstream):
+            start = src_pos * self.symbol_size_bytes
+            result.extend(
+                self.cstream.buffer[start:start + self.symbol_size_bytes]
+            )
+
+        return bytes(result)
+
+    def rcs_check(self, payload: bytes, rcs: bytes) -> bool:
+        """Verify CRC-32 of payload against the provided RCS."""
+        computed = zlib.crc32(payload) & 0xFFFFFFFF
+        expected = int.from_bytes(rcs, byteorder='big')
+        return computed == expected
 
 class StreamReassembler:
     """Stream encoding geometry reassembler for ARQ-FEC."""
@@ -180,7 +228,7 @@ def main():
 
                 packet, addr = sock.recvfrom(RX_BUFFER_SIZE)
 
-                print("\nRX:", packet)
+                print("RX:", packet)
 
                 # -- Reassembly ------------------------------------------------
 
@@ -201,8 +249,23 @@ def main():
 
                 if (decoder.is_decodeable()):
                     print("   ! C-Stream is decodeable !")
-                    # decode ?
+                    decoded_schc_packet = decoder.decode()
+                    print(f"   Decoded SCHC Packet = {decoded_schc_packet}.")
 
+                    # Check against what we expect (assert?)
+                    print(f"   > {('OK' if decoded_schc_packet == SCHC_PACKET else 'ERROR')}")
+
+                    if is_all1:
+                        if decoder.rcs_check(
+                            payload=decoded_schc_packet,
+                            rcs=payload
+                        ):
+                            print(f"   >>> RCS Check OK !!!")
+                            exit() # The end?
+
+                # -- End of main loop ------------------------------------------
+
+                print()
 
             except socket.timeout:
                 print("   Timeout reached - no more packets expected")
@@ -211,10 +274,7 @@ def main():
                 print(f"   Error receiving: {e}")
                 break
 
-        # Process received windows
-        print(f"\nProcessing received windows...")
-        # ...
-        print("  All good!")
+        # Post-processing goes here
 
     except Exception as e:
         print(f"Error: {e}")
