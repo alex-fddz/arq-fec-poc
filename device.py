@@ -9,6 +9,7 @@ import socket
 import math
 import time
 import zlib
+import os
 
 from config import *
 
@@ -400,8 +401,12 @@ def main():
         cstream_size=cstream_size,
         mtu=MTU_SIZE_BYTES
     ):
-        # Form the header (W, FCN): integrate in `iter_fragments()`?
+        # Form the header (W, FCN)
         _, w, fcn = fragment[0]
+
+        if is_packet_lost():
+            print(f"   LOST {w}:{fcn}.")
+            continue
 
         packet = fragmenter.new_fragment(w, fcn)
 
@@ -413,23 +418,29 @@ def main():
             packet.extend(sym)
 
         # Send this fragment to app. server
-        print(f"   TX:", packet.hex())
+        print("   TX:", packet.hex())
         sock.sendto(packet, (IP_ADDR, APP_PORT))
-        time.sleep(0.01) # Small delay between windows
+        time.sleep(0.01) # Small delay between fragments
 
     # Send All-1
-    num_tiles = cstream_size // fragmenter.tile_size_bytes
-    num_windows = (num_tiles // WINDOW_SIZE) # W of last tile
+    if is_packet_lost():
+        print("   LOST ALL-1.")
+    else:
+        num_tiles = cstream_size // fragmenter.tile_size_bytes
+        num_windows = (num_tiles // WINDOW_SIZE) # W of last tile
 
-    all1_packet = fragmenter.new_fragment(w=num_windows, fcn=WINDOW_SIZE)
-    rcs = fragmenter.calculate_crc32(data=SCHC_PACKET)
-    all1_packet.extend(rcs)
+        all1_packet = fragmenter.new_fragment(w=num_windows, fcn=WINDOW_SIZE)
+        rcs = fragmenter.calculate_crc32(data=SCHC_PACKET)
+        all1_packet.extend(rcs)
 
-    print(f"   TX:", all1_packet.hex())
-    sock.sendto(all1_packet, (IP_ADDR, APP_PORT))
+        print("   TX:", all1_packet.hex())
+        sock.sendto(all1_packet, (IP_ADDR, APP_PORT))
 
     # Now await for ACK
     # ...
+
+def is_packet_lost():
+    return int.from_bytes(os.urandom(4),'big')/0x100000000 < LOSS_PROBABILITY
 
 
 if __name__ == "__main__":
