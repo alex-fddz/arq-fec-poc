@@ -131,7 +131,8 @@ class StreamFragmenter:
             tile_size = step
 
             if fragment:
-                mtuwouldoverflow = (size + tile_size > mtu)
+                mtuwouldoverflow = (size + tile_size >
+                    mtu - (self.w_field_size + self.fcn_field_size) // 8)
                 windowbreak = (current_w is not None and w < current_w)
 
                 if mtuwouldoverflow or windowbreak:
@@ -189,7 +190,9 @@ class StreamFragmenter:
         last_window_index = total_windows - 1
         last_window_len = total_tiles - self.window_size * (total_windows - 1)
 
-        max_tiles_per_frag = mtu // self.tile_size_bytes
+        max_tiles_per_frag = (mtu -
+            (self.w_field_size + self.fcn_field_size) // 8
+            ) // self.tile_size_bytes
 
         prev_w = -1
         current_fragment = []

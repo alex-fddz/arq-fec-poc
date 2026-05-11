@@ -11,7 +11,7 @@ W_FIELD_SIZE = 5              # "M" bits; make M+FCN byte-aligned
 TILE_SIZE = SYMBOL_SIZE_BITS  # bits per tile
 INTERLEAVING_DEPTH = 3        # depth for interleaving
 
-MTU_SIZE_BYTES = 10           # Maximum Transmission Unit size in bytes
+MTU_SIZE_BYTES = 11           # Maximum Transmission Unit size in bytes
 LOSS_PROBABILITY = 0.1        # 10% packet loss probability
 MAX_DELAY_MS = 50             # Maximum delay in milliseconds for simulation
 
@@ -19,4 +19,4 @@ IP_ADDR = "127.0.0.1"         # Loopback IP
 DEV_PORT = 5004               # UDP port for Device
 APP_PORT = 5005               # UDP port for App Server
 RX_TIMEOUT = 5                # Server timeout
-RX_BUFFER_SIZE = 255          # Server reception buffer size (MTU?)
+RX_BUFFER_SIZE = MTU_SIZE_BYTES # Server reception buffer size
