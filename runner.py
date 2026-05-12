@@ -8,6 +8,7 @@ suppressing per-run output and writing a unified CSV dataset.
 import csv
 import os
 import threading
+import time
 from contextlib import contextmanager, redirect_stdout, redirect_stderr
 from datetime import datetime
 
@@ -58,6 +59,7 @@ def main():
         print(f"Running {SCENARIO_ITERATIONS} iterations...")
         for i in range(1, SCENARIO_ITERATIONS + 1):
             print(f"  Iteration {i}/{SCENARIO_ITERATIONS}...", end=" ", flush=True)
+            t0 = time.perf_counter()
 
             ready_event = threading.Event()
 
@@ -79,6 +81,8 @@ def main():
             device_thread.join()
             server_thread.join()
 
+            elapsed = time.perf_counter() - t0
+
             device_stats = device_out[0] if device_out else {}
             server_stats = server_out[0] if server_out else {}
 
@@ -95,7 +99,7 @@ def main():
                 server_stats.get("rcs_ok"),
             ])
 
-            print("done")
+            print(f"done ({elapsed:.2f}s)")
 
 
 if __name__ == "__main__":
