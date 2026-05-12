@@ -261,6 +261,7 @@ def main():
 
     # Create UDP socket
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind((IP_ADDR, DEV_PORT))
 
     print(f"SCHC Packet: {SCHC_PACKET.hex()} ({len(SCHC_PACKET)} bytes)")
@@ -446,6 +447,8 @@ def main():
 
     # Now await for ACK
     # ...
+
+    sock.close()
 
     # Return statistics
     return dict(

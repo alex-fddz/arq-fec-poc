@@ -210,9 +210,7 @@ def main(ready_event=None):
 
     # Create UDP socket
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-
-    # Create UDP socket
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind((IP_ADDR, APP_PORT))
     sock.settimeout(RX_TIMEOUT)  # Set timeout
 
