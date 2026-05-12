@@ -250,7 +250,7 @@ def main():
                 if (decoder.is_decodeable()):
                     print("   ! C-Stream is decodeable !")
                     decoded_schc_packet = decoder.decode()
-                    print(f"   Decoded SCHC Packet = {decoded_schc_packet}.")
+                    print(f"   Decoded SCHC Packet = {decoded_schc_packet.hex()}.")
 
                     # Check against what we expect (assert?)
                     print(f"   > {('OK' if decoded_schc_packet == SCHC_PACKET else 'ERROR')}")
