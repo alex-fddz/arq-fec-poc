@@ -20,3 +20,5 @@ DEV_PORT = 5004               # UDP port for Device
 APP_PORT = 5005               # UDP port for App Server
 RX_TIMEOUT = 5                # Server timeout
 RX_BUFFER_SIZE = MTU_SIZE_BYTES # Server reception buffer size
+
+SCENARIO_ITERATIONS = 10      # Times to run the scenario automatically

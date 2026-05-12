@@ -397,15 +397,22 @@ def main():
 
     print(f"\n[7] Transmitting fragments via loopback UDP...")
 
+    # Initialize statistics
+    stats_total_regular = 0
+    stats_lost_regular = 0
+    stats_all1_lost = False
+
     for fragment in fragmenter.iter_fragments(
         cstream_size=cstream_size,
         mtu=MTU_SIZE_BYTES
     ):
         # Form the header (W, FCN)
         _, w, fcn = fragment[0]
+        stats_total_regular += 1
 
         if is_packet_lost():
             print(f"   LOST {w}:{fcn}.")
+            stats_lost_regular += 1
             continue
 
         packet = fragmenter.new_fragment(w, fcn)
@@ -425,6 +432,7 @@ def main():
     # Send All-1
     if is_packet_lost():
         print("   LOST ALL-1.")
+        stats_all1_lost = True
     else:
         num_tiles = cstream_size // fragmenter.tile_size_bytes
         num_windows = (num_tiles // WINDOW_SIZE) # W of last tile
@@ -438,6 +446,14 @@ def main():
 
     # Now await for ACK
     # ...
+
+    # Return statistics
+    return dict(
+        loss_probability=LOSS_PROBABILITY,
+        total_regular=stats_total_regular,
+        lost_regular=stats_lost_regular,
+        all1_lost=stats_all1_lost,
+    )
 
 def is_packet_lost():
     return int.from_bytes(os.urandom(4),'big')/0x100000000 < LOSS_PROBABILITY

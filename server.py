@@ -8,7 +8,6 @@ Receives fragmented encoded SCHC packets via loopback UDP and attempts reconstru
 import socket
 import math
 import zlib
-
 from config import *
 
 class ReceptionCStream:
@@ -181,7 +180,7 @@ class StreamReassembler:
             tile_index = base_index + tile_offset * stride
             self.cstream.put_data(index=tile_index, data=tile_bytes)
 
-def main():
+def main(ready_event=None):
     """Main function for the ARQ-FEC application server (receiver)."""
 
     print("ARQ-FEC App Server (Receiver) - Stream Encoding Geometry")
@@ -217,8 +216,17 @@ def main():
     sock.bind((IP_ADDR, APP_PORT))
     sock.settimeout(RX_TIMEOUT)  # Set timeout
 
+    if ready_event is not None:
+        ready_event.set()
+
     print(f"Listening on {IP_ADDR}:{APP_PORT}")
     print(f"Waiting for fragmented SCHC packets...")
+
+    # Initialize statistics
+    stats_regular_received = 0
+    stats_all1_received = False
+    stats_decodeable = False
+    stats_rcs_ok = False
 
     try:
 
@@ -239,17 +247,20 @@ def main():
 
                 if is_all1:
                     print("   Received ALL-1 fragment.")
+                    stats_all1_received = True
 
                 else:
                     # Process regular fragments
                     reassembler.place_tiles(w, fcn, payload)
                     print(f"   C-Stream> {cstream.buffer.hex()}")
+                    stats_regular_received += 1
 
                 # -- Decoding --------------------------------------------------
 
                 if (decoder.is_decodeable()):
                     print("   ! C-Stream is decodeable !")
                     decoded_schc_packet = decoder.decode()
+                    stats_decodeable = True
                     print(f"   Decoded SCHC Packet = {decoded_schc_packet.hex()}.")
 
                     # Check against what we expect (assert?)
@@ -261,7 +272,8 @@ def main():
                             rcs=payload
                         ):
                             print(f"   >>> RCS Check OK !!!")
-                            exit() # The end?
+                            stats_rcs_ok = True
+                            break
 
                 # -- End of main loop ------------------------------------------
 
@@ -281,6 +293,14 @@ def main():
     finally:
         sock.close()
         print("\nServer shutting down...")
+
+    # Return statistics
+    return dict(
+        regular_received=stats_regular_received,
+        all1_received=stats_all1_received,
+        decodeable=stats_decodeable,
+        rcs_ok=stats_rcs_ok,
+    )
 
 if __name__ == "__main__":
     main()
