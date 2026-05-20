@@ -33,6 +33,8 @@ class StreamEncoder:
     
     def get_source_symbol(self, schc_packet: bytes, index: int):
         """Get source symbol from (virtual) D-stream."""
+        if index < 0: # Enable negative indices
+            index = len(schc_packet) - (index * -1)
         return schc_packet[index:index+self.symbol_size_bytes]
 
     def get_c_stream_size(self, source_symbols_number: int):
@@ -42,9 +44,8 @@ class StreamEncoder:
         trailing = source_symbols_number % self.k
 
         encoded_from_full = full_blocks * self.n
-        # Trailing source symbols are carried directly (no parity block created)
-        # so they add one encoded symbol each.
-        total_encoded = encoded_from_full + trailing
+        # Trailing source symbols (remaining coding bits) carried in All1.
+        total_encoded = encoded_from_full # + trailing
 
         return total_encoded, trailing
 
@@ -294,9 +295,9 @@ def main():
     # Calculate size of encoded stream
     cstream_size, trailing_syms = encoder.get_c_stream_size(len(source_symbols))
 
-    assert cstream_size == len(SCHC_PACKET) * 3 // 2
+    assert cstream_size == len(SCHC_PACKET) * 3 // 2 - 1
     assert encoder.get_c_stream_size(2) == (3, 0) # SB (2) -> EB (3)
-    assert encoder.get_c_stream_size(3) == (4, 1)
+    assert encoder.get_c_stream_size(3) == (3, 1)
 
     print("\n[2] Produce encoded blocks (C-Stream):")
     print("   " + " ".join(
@@ -439,6 +440,9 @@ def main():
         num_windows = (num_tiles // WINDOW_SIZE) # W of last tile
 
         all1_packet = fragmenter.new_fragment(w=num_windows, fcn=WINDOW_SIZE)
+        # Send remaining coding bits now (if any)
+        for i in range(-trailing_syms, 0):
+            all1_packet.extend(encoder.get_source_symbol(SCHC_PACKET, i))
         rcs = fragmenter.calculate_crc32(data=SCHC_PACKET)
         all1_packet.extend(rcs)
 
