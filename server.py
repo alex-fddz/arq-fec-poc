@@ -16,6 +16,7 @@ class ReceptionCStream:
     def __init__(self):
         self.buffer: bytearray = bytearray()
         self.bitmap: list[bool] = []
+        self.rembits: bytearray = bytearray()
 
     def put_data(self, index: int, data: bytes) -> None:
         """Put data in the C-Stream buffer at the given tile index."""
@@ -112,12 +113,8 @@ class StreamDecoder:
                         recovered = bytes(a ^ b for a, b in zip(recovered, d))
                     result.extend(recovered)
 
-        # Append trailing source symbols as-is (no parity exists)
-        for src_pos in range(full_blocks_end, symbols_in_cstream):
-            start = src_pos * self.symbol_size_bytes
-            result.extend(
-                self.cstream.buffer[start:start + self.symbol_size_bytes]
-            )
+        # Append remaining coding bits
+        result.extend(self.cstream.rembits)
 
         return bytes(result)
 
@@ -179,6 +176,10 @@ class StreamReassembler:
             tile_bytes = tiles[start:start+step]
             tile_index = base_index + tile_offset * stride
             self.cstream.put_data(index=tile_index, data=tile_bytes)
+
+    def set_remaining_coding_bits(self, data: bytearray) -> None:
+        """Set the remaining coding bits, carried in All-1."""
+        self.cstream.rembits = data
 
 def main(ready_event=None):
     """Main function for the ARQ-FEC application server (receiver)."""
@@ -246,6 +247,11 @@ def main(ready_event=None):
                 if is_all1:
                     print("   Received ALL-1 fragment.")
                     stats_all1_received = True
+                    # Check if All-1 carries tiles
+                    if len(payload) > 4: # RCS Size is 4 bytes
+                        last_tiles = payload[:-4]
+                        reassembler.set_remaining_coding_bits(last_tiles)
+
 
                 else:
                     # Process regular fragments
@@ -261,13 +267,10 @@ def main(ready_event=None):
                     stats_decodeable = True
                     print(f"   Decoded SCHC Packet = {decoded_schc_packet.hex()}.")
 
-                    # Check against what we expect (assert?)
-                    print(f"   > {('OK' if decoded_schc_packet == SCHC_PACKET else 'ERROR')}")
-
                     if is_all1:
                         if decoder.rcs_check(
                             payload=decoded_schc_packet,
-                            rcs=payload
+                            rcs=payload[-4:] # Last 4 bytes only (RCS Size)
                         ):
                             print(f"   >>> RCS Check OK !!!")
                             stats_rcs_ok = True
