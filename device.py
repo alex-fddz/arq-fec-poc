@@ -398,6 +398,7 @@ def main():
         assert fragments[i] == visual_procedure_fragments[i]
 
     print(f"\n[7] Transmitting fragments via loopback UDP...")
+    time.sleep(0.05) # Small delay to let server initialize
 
     # Initialize statistics
     stats_total_regular = 0
