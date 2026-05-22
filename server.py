@@ -8,6 +8,7 @@ Receives fragmented encoded SCHC packets via loopback UDP and attempts reconstru
 import socket
 import math
 import zlib
+import time
 from config import *
 
 class ReceptionCStream:
@@ -233,7 +234,7 @@ def main(ready_event=None):
             try:
                 # -- Reception -------------------------------------------------
 
-                packet, addr = sock.recvfrom(RX_BUFFER_SIZE)
+                packet, dev = sock.recvfrom(RX_BUFFER_SIZE)
 
                 print("RX:", packet)
 
@@ -274,6 +275,11 @@ def main(ready_event=None):
                         ):
                             print(f"   >>> RCS Check OK !!!")
                             stats_rcs_ok = True
+
+                            # Send ACK with C=1
+                            c1_ack = bytes.fromhex("ff")
+                            sock.sendto(c1_ack, dev)
+                            time.sleep(0.01) # Small delay
                             break
 
                 # -- End of main loop ------------------------------------------

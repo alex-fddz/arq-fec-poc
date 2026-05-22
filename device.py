@@ -264,6 +264,7 @@ def main():
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind((IP_ADDR, DEV_PORT))
+    sock.settimeout(RX_TIMEOUT - 1)  # Set timeout (shorter than server's)
 
     print(f"SCHC Packet: {SCHC_PACKET.hex()} ({len(SCHC_PACKET)} bytes)")
 
@@ -433,7 +434,7 @@ def main():
         time.sleep(0.01) # Small delay between fragments
 
     # Send All-1
-    if is_packet_lost():
+    if False: # is_packet_lost(): # Disable this for now: finish happy path first
         print("   LOST ALL-1.")
         stats_all1_lost = True
     else:
@@ -451,9 +452,34 @@ def main():
         sock.sendto(all1_packet, (IP_ADDR, APP_PORT))
 
     # Now await for ACK
-    # ...
+    print(f"\n[8] Awaiting for ACK...")
 
+    # try:
+    #     retries = 0
+    #     while retries < 1:
+    try:
+        ack, addr = sock.recvfrom(1024)
+
+        if ack[0] == 0xFF: # C field
+            print("All good!")
+
+        # ...
+
+    except socket.timeout:
+        print("   Timeout reached - no ack")
+        # Send ACK-REQ
+        # ...
+        # retries += 1
+    except Exception as e:
+        print(f"   Error receiving: {e}")
+
+    # except Exception as e:
+    #     print(f"Error: {e}")
+    # finally:
+    #     sock.close()
+    #     print("\nDevice shutting down...")
     sock.close()
+    print("\nDevice shutting down...")
 
     # Return statistics
     return dict(
