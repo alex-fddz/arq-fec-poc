@@ -10,6 +10,7 @@ import math
 import time
 import zlib
 import os
+import pickle
 
 from config import *
 
@@ -462,6 +463,11 @@ def main():
 
         if ack[0] == 0xFF: # C field
             print("All good!")
+
+        elif ack[0] == 0x00:
+            print("Need to Re Tx...")
+            recvd_frags = pickle.loads(ack[1:])
+            print(f"  all except {recvd_frags}")
 
         # ...
 

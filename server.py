@@ -9,6 +9,8 @@ import socket
 import math
 import zlib
 import time
+import pickle
+
 from config import *
 
 class ReceptionCStream:
@@ -228,6 +230,9 @@ def main(ready_event=None):
     stats_decodeable = False
     stats_rcs_ok = False
 
+    # Init Ack "bitmap"
+    received_frags = set()
+
     try:
 
         while True:
@@ -242,6 +247,9 @@ def main(ready_event=None):
 
                 w, fcn, payload = reassembler.parse_fragment(packet)
                 print(f"   w={w}, fcn={fcn}, payload={payload.hex()}")
+
+                # Save for Ack "bitmap"
+                received_frags.add((w, fcn))
 
                 is_all1 = (fcn == reassembler.window_size)
 
@@ -281,6 +289,17 @@ def main(ready_event=None):
                             sock.sendto(c1_ack, dev)
                             time.sleep(0.01) # Small delay
                             break
+
+                if is_all1 and not decoder.is_decodeable():
+                    # Failed to decode
+                    print(f"   >>> Failed to decode. Sending ACK C=0...")
+                    c0_ack = bytearray(bytes.fromhex("00"))
+                    ack_bitmap = pickle.dumps(received_frags)
+                    c0_ack.extend(ack_bitmap)
+                    # Send ACK with C=0 + "bitmap"
+                    sock.sendto(c0_ack, dev)
+                    time.sleep(0.01) # Small delay
+
 
                 # -- End of main loop ------------------------------------------
 
