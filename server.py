@@ -240,7 +240,13 @@ def main(ready_event=None):
 
                 packet, dev = sock.recvfrom(RX_BUFFER_SIZE)
 
-                print(f"{Color.PURPLE}RX:{Color.ENDC}", packet)
+                print(f"\n{Color.PURPLE}RX:{Color.ENDC}", packet)
+
+                # Handle ACK-REQ
+                if packet.hex() == "aa":
+                    print("   ACK-REQ: Sending C0 ACK...")
+                    send_c0_ack(sock, received_frags)
+                    continue
 
                 # -- Reassembly ------------------------------------------------
 
@@ -312,8 +318,6 @@ def main(ready_event=None):
 
 
                 # -- End of main loop ------------------------------------------
-
-                print()
 
             except socket.timeout:
                 print(f"   {Color.BOLD}{Color.RED}Timeout reached{Color.ENDC} - no more packets expected")

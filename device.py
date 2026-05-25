@@ -448,72 +448,77 @@ def main():
             time.sleep(0.01) # Small delay between fragments
 
         # Send All-1
-        if False: # is_packet_lost(): # Disable this for now: finish happy path first
+        num_tiles = cstream_size // fragmenter.tile_size_bytes
+        num_windows = (num_tiles // WINDOW_SIZE) # W of last tile
+
+        # Skip All-1 if it's not missing
+        if (num_windows, WINDOW_SIZE) in frags_to_skip:
+            return
+        if ALLOW_ALL1_LOSS and is_packet_lost():
             print(f"   {Color.RED}LOST ALL-1.{Color.ENDC}")
             stats_all1_lost = True
-        else:
-            num_tiles = cstream_size // fragmenter.tile_size_bytes
-            num_windows = (num_tiles // WINDOW_SIZE) # W of last tile
+            return
 
-            # Skip All-1 if it's not missing
-            if (num_windows, WINDOW_SIZE) in frags_to_skip:
-                return
+        all1_packet = fragmenter.new_fragment(w=num_windows, fcn=WINDOW_SIZE)
+        # Send remaining coding bits now (if any)
+        for i in range(-trailing_syms, 0):
+            all1_packet.extend(encoder.get_source_symbol(SCHC_PACKET, i))
+        rcs = fragmenter.calculate_crc32(data=SCHC_PACKET)
+        all1_packet.extend(rcs)
 
-            all1_packet = fragmenter.new_fragment(w=num_windows, fcn=WINDOW_SIZE)
-            # Send remaining coding bits now (if any)
-            for i in range(-trailing_syms, 0):
-                all1_packet.extend(encoder.get_source_symbol(SCHC_PACKET, i))
-            rcs = fragmenter.calculate_crc32(data=SCHC_PACKET)
-            all1_packet.extend(rcs)
-
-            print(f"   {Color.BLUE}TX:{Color.ENDC}", all1_packet.hex())
-            sock.sendto(all1_packet, (IP_ADDR, APP_PORT))
-            time.sleep(0.01) # Small delay between fragments
+        print(f"   {Color.BLUE}TX:{Color.ENDC}", all1_packet.hex())
+        sock.sendto(all1_packet, (IP_ADDR, APP_PORT))
+        time.sleep(0.01) # Small delay between fragments
 
     send_schc_fragments()
 
-    # Now await for ACK
-    print(f"\n[8] Awaiting for ACK...")
+    # Now await ACK
+    print(f"\n[8] Awaiting ACK...")
 
-    # try:
-    #     retries = 0
-    #     while retries < 1:
     try:
-        ack, addr = sock.recvfrom(1024)
+        attempts = 0
+        MAX_ATTEMPTS = 2
+        while attempts < MAX_ATTEMPTS:
+            try:
+                attempts += 1
+                ack, addr = sock.recvfrom(1024)
 
-        if ack[0] == 0xFF: # C field
-            print(f"   {Color.GREEN}Got C=1{Color.ENDC}; All good!")
+                if ack[0] == 0xFF: # C field
+                    print(f"   {Color.GREEN}Got C=1{Color.ENDC}; All good!")
+                    break
 
-        elif ack[0] == 0x00:
-            print(f"   {Color.BLUE}Got C=0{Color.ENDC}; Retransmitting...{Color.ENDC}")
-            recvd_frags = pickle.loads(ack[1:])
+                elif ack[0] == 0x00:
+                    print(f"   {Color.BLUE}Got C=0{Color.ENDC}; Retransmitting...{Color.ENDC}")
+                    recvd_frags = pickle.loads(ack[1:])
 
-            send_schc_fragments(frags_to_skip=recvd_frags)
+                    send_schc_fragments(frags_to_skip=recvd_frags)
 
-            # print(f"Awaiting for ACK (2)...")
-            # ack, addr = sock.recvfrom(1024)
-            # if ack[0] == 0xFF: # C field
-            #     print("2) All good!")
-            # else:
-            #     print("2) Well, I tried.")
+                    # print(f"Awaiting ACK (2)...")
+                    # ack, addr = sock.recvfrom(1024)
+                    # if ack[0] == 0xFF: # C field
+                    #     print("2) All good!")
+                    # else:
+                    #     print("2) Well, I tried.")
 
-        # ...
+                    break # Only retransmit once.
 
-    except socket.timeout:
-        print("   Timeout reached - no ack")
-        # Send ACK-REQ
-        # ...
-        # retries += 1
+            except socket.timeout:
+                print("   Timeout reached - no ack")
+                # Send ACK-REQ
+                if attempts < MAX_ATTEMPTS:
+                    print(f"   Sending {Color.BLUE}ACK-REQ{Color.ENDC}...")
+                    sock.sendto(bytes.fromhex("aa"), (IP_ADDR, APP_PORT))
+                    time.sleep(0.01) # Small delay after Tx
+                else:
+                    break
+            except Exception as e:
+                print(f"   Error receiving: {e}")
+
     except Exception as e:
-        print(f"   Error receiving: {e}")
-
-    # except Exception as e:
-    #     print(f"Error: {e}")
-    # finally:
-    #     sock.close()
-    #     print("\nDevice shutting down...")
-    sock.close()
-    print("\nDevice shutting down...")
+        print(f"   Error: {e}")
+    finally:
+        sock.close()
+        print("\nDevice shutting down...")
 
     # Return statistics
     return dict(

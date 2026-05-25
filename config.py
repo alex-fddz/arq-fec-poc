@@ -13,6 +13,7 @@ INTERLEAVING_DEPTH = 3        # depth for interleaving
 
 MTU_SIZE_BYTES = 11           # Maximum Transmission Unit size in bytes
 LOSS_PROBABILITY = 0.1        # 10% packet loss probability
+ALLOW_ALL1_LOSS = True        # Allow (or prevent) losing the All-1 fragment
 MAX_DELAY_MS = 50             # Maximum delay in milliseconds for simulation
 
 IP_ADDR = "127.0.0.1"         # Loopback IP
