@@ -185,6 +185,18 @@ class StreamReassembler:
         """Set the remaining coding bits, carried in All-1."""
         self.cstream.rembits = data
 
+def send_c1_ack(sock):
+    """Helper to send C=1 Ack."""
+    sock.sendto(b'\xff', (IP_ADDR, DEV_PORT))
+    time.sleep(0.01) # Small delay after Tx
+
+def send_c0_ack(sock, received_frags: list):
+    """Helper to send C=0 Ack."""
+    ack = bytearray(b'\x00')
+    ack.extend(pickle.dumps(list(received_frags)))
+    sock.sendto(ack, (IP_ADDR, DEV_PORT))
+    time.sleep(0.01) # Small delay after Tx
+
 def main(ready_event=None):
     """Main function for the ARQ-FEC application server (receiver)."""
 
@@ -225,15 +237,15 @@ def main(ready_event=None):
     print(f"Listening on {IP_ADDR}:{APP_PORT}")
     print(f"Waiting for fragmented SCHC packets...")
 
-    # Initialize statistics
-    stats_regular_received = 0
-    stats_all1_received = False
-    stats_decodeable = False
-    stats_rcs_ok = False
-
     # Init Ack "bitmap"
     received_frags = set()
     is_retx = False
+    all1_received = False
+
+    # Initialize statistics
+    stats_regular_received = 0
+    stats_decodeable = False
+    stats_rcs_ok = False
 
     try:
 
@@ -257,13 +269,12 @@ def main(ready_event=None):
 
                 if is_all1:
                     print("   Received ALL-1 fragment.")
-                    stats_all1_received = True
+                    all1_received = True
                     # Check if All-1 carries tiles
                     if len(payload) > 4: # RCS Size is 4 bytes
                         last_tiles = payload[:-4]
                         reassembler.set_remaining_coding_bits(last_tiles)
                     decoder.all1_rcs = payload[-4:]
-
 
                 else:
                     # Process regular fragments
@@ -281,45 +292,38 @@ def main(ready_event=None):
                     stats_decodeable = True
                     print(f"   Decoded SCHC Packet = {decoded_schc_packet.hex()}.")
 
-                    if decoder.all1_rcs is not None:
-                        if decoder.rcs_check(
-                            payload=decoded_schc_packet
-                        ):
+                    if all1_received:
+                        if decoder.rcs_check(payload=decoded_schc_packet):
                             print(f"   >>> RCS Check OK !!!")
                             stats_rcs_ok = True
 
                             if not is_retx:
                                 # Send ACK with C=1
                                 print("    Sending ACK C=1...")
-                                time.sleep(0.1) # Let dev await / Or await an ACK-REQ from dev?
-                                c1_ack = bytes.fromhex("ff")
-                                sock.sendto(c1_ack, dev)
-                                time.sleep(0.01) # Small delay
+                                send_c1_ack(sock)
                             break
-                        else:
+
+                        else: # Bad RCS
                             if not is_retx:
                                 # Send ACK with C=0
                                 print(f"   >>> Failed to decode. Sending ACK C=0...")
-                                c0_ack = bytearray(bytes.fromhex("00"))
-                                ack_bitmap = pickle.dumps(list(received_frags))
-                                c0_ack.extend(ack_bitmap)
-                                # Send ACK with C=0 + "bitmap"
-                                sock.sendto(c0_ack, dev)
-                                time.sleep(0.01) # Small delay
+                                send_c0_ack(sock, received_frags)
                                 is_retx = True
+                            else:
+                                # Decodeable, All1 received, Bad RCS, 2nd attempt:
+                                print(f"   > Current reassembly fails RCS; waiting for additional data...")
 
                 else: # Not decodeable
-                    if decoder.all1_rcs is not None and not is_retx: # Got All1
-                        # Failed to decode; begin retransmissions
-                        print(f"   >>> Failed to decode. Sending ACK C=0...")
-                        # How do we know if the device is not retransmitting more? Await a fake ACK-REQ from dev?
-                        c0_ack = bytearray(bytes.fromhex("00"))
-                        ack_bitmap = pickle.dumps(list(received_frags))
-                        c0_ack.extend(ack_bitmap)
-                        # Send ACK with C=0 + "bitmap"
-                        sock.sendto(c0_ack, dev)
-                        time.sleep(0.01) # Small delay
-                        is_retx = True
+                    if all1_received:
+                        if not is_retx:
+                            # Failed to decode; begin retransmissions
+                            print(f"   >>> Failed to decode. Sending ACK C=0...")
+                            # How do we know if the device is not retransmitting more? Await a fake ACK-REQ from dev?
+                            send_c0_ack(sock, received_frags)
+                            is_retx = True
+                        else:
+                            # Not decodeable, All1 received, 2nd attempt.
+                            print(f"   > Current reassembly not decodeable; waiting for additional data...")
 
 
                 # -- End of main loop ------------------------------------------
@@ -344,7 +348,7 @@ def main(ready_event=None):
     # Return statistics
     return dict(
         regular_received=stats_regular_received,
-        all1_received=stats_all1_received,
+        all1_received=all1_received,
         decodeable=stats_decodeable,
         rcs_ok=stats_rcs_ok,
     )
