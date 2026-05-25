@@ -407,50 +407,69 @@ def main():
     stats_lost_regular = 0
     stats_all1_lost = False
 
-    for fragment in fragmenter.iter_fragments(
-        cstream_size=cstream_size,
-        mtu=MTU_SIZE_BYTES
-    ):
-        # Form the header (W, FCN)
-        _, w, fcn = fragment[0]
-        stats_total_regular += 1
+    def send_schc_fragments(frags_to_skip: list = []):
+        """High level uplink function: Send Regular + All-1 Fragments."""
 
-        if is_packet_lost():
-            print(f"   LOST {w}:{fcn}.")
-            stats_lost_regular += 1
-            continue
+        nonlocal stats_total_regular
+        nonlocal stats_lost_regular
+        nonlocal stats_all1_lost
 
-        packet = fragmenter.new_fragment(w, fcn)
+        for fragment in fragmenter.iter_fragments(
+            cstream_size=cstream_size,
+            mtu=MTU_SIZE_BYTES
+        ):
+            # Form the header (W, FCN)
+            _, w, fcn = fragment[0]
 
-        for idx, _, _ in fragment:
-            sym = encoder.get_encoded_symbol(
-                SCHC_PACKET,
-                idx * encoder.symbol_size_bytes
-            )
-            packet.extend(sym)
+            # Retransmissions: skip received frags
+            if (w, fcn) in frags_to_skip:
+                continue
 
-        # Send this fragment to app. server
-        print("   TX:", packet.hex())
-        sock.sendto(packet, (IP_ADDR, APP_PORT))
-        time.sleep(0.01) # Small delay between fragments
+            stats_total_regular += 1
 
-    # Send All-1
-    if False: # is_packet_lost(): # Disable this for now: finish happy path first
-        print("   LOST ALL-1.")
-        stats_all1_lost = True
-    else:
-        num_tiles = cstream_size // fragmenter.tile_size_bytes
-        num_windows = (num_tiles // WINDOW_SIZE) # W of last tile
+            if is_packet_lost():
+                print(f"   LOST {w}:{fcn}.")
+                stats_lost_regular += 1
+                continue
 
-        all1_packet = fragmenter.new_fragment(w=num_windows, fcn=WINDOW_SIZE)
-        # Send remaining coding bits now (if any)
-        for i in range(-trailing_syms, 0):
-            all1_packet.extend(encoder.get_source_symbol(SCHC_PACKET, i))
-        rcs = fragmenter.calculate_crc32(data=SCHC_PACKET)
-        all1_packet.extend(rcs)
+            packet = fragmenter.new_fragment(w, fcn)
 
-        print("   TX:", all1_packet.hex())
-        sock.sendto(all1_packet, (IP_ADDR, APP_PORT))
+            for idx, _, _ in fragment:
+                sym = encoder.get_encoded_symbol(
+                    SCHC_PACKET,
+                    idx * encoder.symbol_size_bytes
+                )
+                packet.extend(sym)
+
+            # Send this fragment to app. server
+            print("   TX:", packet.hex())
+            sock.sendto(packet, (IP_ADDR, APP_PORT))
+            time.sleep(0.01) # Small delay between fragments
+
+        # Send All-1
+        if False: # is_packet_lost(): # Disable this for now: finish happy path first
+            print("   LOST ALL-1.")
+            stats_all1_lost = True
+        else:
+            num_tiles = cstream_size // fragmenter.tile_size_bytes
+            num_windows = (num_tiles // WINDOW_SIZE) # W of last tile
+
+            # Skip All-1 if it's not missing
+            if (num_windows, WINDOW_SIZE) in frags_to_skip:
+                return
+
+            all1_packet = fragmenter.new_fragment(w=num_windows, fcn=WINDOW_SIZE)
+            # Send remaining coding bits now (if any)
+            for i in range(-trailing_syms, 0):
+                all1_packet.extend(encoder.get_source_symbol(SCHC_PACKET, i))
+            rcs = fragmenter.calculate_crc32(data=SCHC_PACKET)
+            all1_packet.extend(rcs)
+
+            print("   TX:", all1_packet.hex())
+            sock.sendto(all1_packet, (IP_ADDR, APP_PORT))
+            time.sleep(0.01) # Small delay between fragments
+
+    send_schc_fragments()
 
     # Now await for ACK
     print(f"\n[8] Awaiting for ACK...")
@@ -462,12 +481,20 @@ def main():
         ack, addr = sock.recvfrom(1024)
 
         if ack[0] == 0xFF: # C field
-            print("All good!")
+            print("Got C=1; All good!")
 
         elif ack[0] == 0x00:
-            print("Need to Re Tx...")
+            print("Got C=0; Retransmitting...")
             recvd_frags = pickle.loads(ack[1:])
-            print(f"  all except {recvd_frags}")
+
+            send_schc_fragments(frags_to_skip=recvd_frags)
+
+            # print(f"Awaiting for ACK (2)...")
+            # ack, addr = sock.recvfrom(1024)
+            # if ack[0] == 0xFF: # C field
+            #     print("2) All good!")
+            # else:
+            #     print("2) Well, I tried.")
 
         # ...
 

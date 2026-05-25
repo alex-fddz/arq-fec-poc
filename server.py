@@ -43,6 +43,7 @@ class StreamDecoder:
         self.k = k  # source symbols per block
         self.n = n  # encoded symbols per block
         self.symbols_per_tile = (tile_size_bits // 8) // self.symbol_size_bytes
+        self.all1_rcs = None
 
     def symbol_received(self, symbol_index: int) -> bool:
         """Read the C-Stream bitmap to see if a symbol has been received."""
@@ -121,10 +122,10 @@ class StreamDecoder:
 
         return bytes(result)
 
-    def rcs_check(self, payload: bytes, rcs: bytes) -> bool:
+    def rcs_check(self, payload: bytes) -> bool:
         """Verify CRC-32 of payload against the provided RCS."""
         computed = zlib.crc32(payload) & 0xFFFFFFFF
-        expected = int.from_bytes(rcs, byteorder='big')
+        expected = int.from_bytes(self.all1_rcs, byteorder='big')
         return computed == expected
 
 class StreamReassembler:
@@ -232,6 +233,7 @@ def main(ready_event=None):
 
     # Init Ack "bitmap"
     received_frags = set()
+    is_retx = False
 
     try:
 
@@ -260,45 +262,64 @@ def main(ready_event=None):
                     if len(payload) > 4: # RCS Size is 4 bytes
                         last_tiles = payload[:-4]
                         reassembler.set_remaining_coding_bits(last_tiles)
+                    decoder.all1_rcs = payload[-4:]
 
 
                 else:
                     # Process regular fragments
                     reassembler.place_tiles(w, fcn, payload)
                     print(f"   C-Stream> {cstream.buffer.hex()}")
+                    bm = " ".join('1' if b else '0' for b in cstream.bitmap)
+                    print(f"   Bitmap>   {bm}")
                     stats_regular_received += 1
 
                 # -- Decoding --------------------------------------------------
 
-                if (decoder.is_decodeable()):
+                if decoder.is_decodeable():
                     print("   ! C-Stream is decodeable !")
                     decoded_schc_packet = decoder.decode()
                     stats_decodeable = True
                     print(f"   Decoded SCHC Packet = {decoded_schc_packet.hex()}.")
 
-                    if is_all1:
+                    if decoder.all1_rcs is not None:
                         if decoder.rcs_check(
-                            payload=decoded_schc_packet,
-                            rcs=payload[-4:] # Last 4 bytes only (RCS Size)
+                            payload=decoded_schc_packet
                         ):
                             print(f"   >>> RCS Check OK !!!")
                             stats_rcs_ok = True
 
-                            # Send ACK with C=1
-                            c1_ack = bytes.fromhex("ff")
-                            sock.sendto(c1_ack, dev)
-                            time.sleep(0.01) # Small delay
+                            if not is_retx:
+                                # Send ACK with C=1
+                                print("    Sending ACK C=1...")
+                                time.sleep(0.1) # Let dev await / Or await an ACK-REQ from dev?
+                                c1_ack = bytes.fromhex("ff")
+                                sock.sendto(c1_ack, dev)
+                                time.sleep(0.01) # Small delay
                             break
+                        else:
+                            if not is_retx:
+                                # Send ACK with C=0
+                                print(f"   >>> Failed to decode. Sending ACK C=0...")
+                                c0_ack = bytearray(bytes.fromhex("00"))
+                                ack_bitmap = pickle.dumps(list(received_frags))
+                                c0_ack.extend(ack_bitmap)
+                                # Send ACK with C=0 + "bitmap"
+                                sock.sendto(c0_ack, dev)
+                                time.sleep(0.01) # Small delay
+                                is_retx = True
 
-                if is_all1 and not decoder.is_decodeable():
-                    # Failed to decode
-                    print(f"   >>> Failed to decode. Sending ACK C=0...")
-                    c0_ack = bytearray(bytes.fromhex("00"))
-                    ack_bitmap = pickle.dumps(received_frags)
-                    c0_ack.extend(ack_bitmap)
-                    # Send ACK with C=0 + "bitmap"
-                    sock.sendto(c0_ack, dev)
-                    time.sleep(0.01) # Small delay
+                else: # Not decodeable
+                    if decoder.all1_rcs is not None and not is_retx: # Got All1
+                        # Failed to decode; begin retransmissions
+                        print(f"   >>> Failed to decode. Sending ACK C=0...")
+                        # How do we know if the device is not retransmitting more? Await a fake ACK-REQ from dev?
+                        c0_ack = bytearray(bytes.fromhex("00"))
+                        ack_bitmap = pickle.dumps(list(received_frags))
+                        c0_ack.extend(ack_bitmap)
+                        # Send ACK with C=0 + "bitmap"
+                        sock.sendto(c0_ack, dev)
+                        time.sleep(0.01) # Small delay
+                        is_retx = True
 
 
                 # -- End of main loop ------------------------------------------
