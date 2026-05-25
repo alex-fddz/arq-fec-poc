@@ -13,6 +13,7 @@ import os
 import pickle
 
 from config import *
+from colors import Color
 
 # =============================================================================
 # E N C O D E R
@@ -258,8 +259,8 @@ class StreamFragmenter:
 def main():
     """Main function for the ARQ-FEC device (sender)."""
 
-    print("ARQ-FEC Device (Sender) - Stream Encoding Geometry")
-    print("=" * 52)
+    print(f"{Color.BLUE}ARQ-FEC Device (Sender) - Stream Encoding Geometry{Color.ENDC}")
+    print(Color.BLUE, "=" * 52, Color.ENDC)
 
     # Create UDP socket
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -428,7 +429,7 @@ def main():
             stats_total_regular += 1
 
             if is_packet_lost():
-                print(f"   LOST {w}:{fcn}.")
+                print(f"   {Color.RED}LOST {w}:{fcn}.{Color.ENDC}")
                 stats_lost_regular += 1
                 continue
 
@@ -442,13 +443,13 @@ def main():
                 packet.extend(sym)
 
             # Send this fragment to app. server
-            print("   TX:", packet.hex())
+            print(f"   {Color.BLUE}TX:{Color.ENDC}", packet.hex())
             sock.sendto(packet, (IP_ADDR, APP_PORT))
             time.sleep(0.01) # Small delay between fragments
 
         # Send All-1
         if False: # is_packet_lost(): # Disable this for now: finish happy path first
-            print("   LOST ALL-1.")
+            print(f"   {Color.RED}LOST ALL-1.{Color.ENDC}")
             stats_all1_lost = True
         else:
             num_tiles = cstream_size // fragmenter.tile_size_bytes
@@ -465,7 +466,7 @@ def main():
             rcs = fragmenter.calculate_crc32(data=SCHC_PACKET)
             all1_packet.extend(rcs)
 
-            print("   TX:", all1_packet.hex())
+            print(f"   {Color.BLUE}TX:{Color.ENDC}", all1_packet.hex())
             sock.sendto(all1_packet, (IP_ADDR, APP_PORT))
             time.sleep(0.01) # Small delay between fragments
 
@@ -481,10 +482,10 @@ def main():
         ack, addr = sock.recvfrom(1024)
 
         if ack[0] == 0xFF: # C field
-            print("Got C=1; All good!")
+            print(f"   {Color.GREEN}Got C=1{Color.ENDC}; All good!")
 
         elif ack[0] == 0x00:
-            print("Got C=0; Retransmitting...")
+            print(f"   {Color.BLUE}Got C=0{Color.ENDC}; Retransmitting...{Color.ENDC}")
             recvd_frags = pickle.loads(ack[1:])
 
             send_schc_fragments(frags_to_skip=recvd_frags)

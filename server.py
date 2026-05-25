@@ -12,6 +12,7 @@ import time
 import pickle
 
 from config import *
+from colors import Color
 
 class ReceptionCStream:
     """C-Stream data structure (shared state for Reassembler and Decoder)."""
@@ -200,8 +201,8 @@ def send_c0_ack(sock, received_frags: list):
 def main(ready_event=None):
     """Main function for the ARQ-FEC application server (receiver)."""
 
-    print("ARQ-FEC App Server (Receiver) - Stream Encoding Geometry")
-    print("=" * 52)
+    print(f"{Color.PURPLE}ARQ-FEC App Server (Receiver) - Stream Encoding Geometry{Color.ENDC}")
+    print(Color.PURPLE, "=" * 52, Color.ENDC)
 
     # Initialize reception C-Stream
     cstream = ReceptionCStream()
@@ -223,7 +224,7 @@ def main(ready_event=None):
         tile_size_bits=TILE_SIZE
     )
 
-    print(f"Reassembler and Decoder sub-processes initialized.")
+    # print(f"{Color.PURPLE}Reassembler and Decoder sub-processes initialized.{Color.ENDC}")
 
     # Create UDP socket
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -234,8 +235,7 @@ def main(ready_event=None):
     if ready_event is not None:
         ready_event.set()
 
-    print(f"Listening on {IP_ADDR}:{APP_PORT}")
-    print(f"Waiting for fragmented SCHC packets...")
+    print(f"{Color.PURPLE}Listening on {IP_ADDR}:{APP_PORT}...{Color.ENDC}")
 
     # Init Ack "bitmap"
     received_frags = set()
@@ -255,7 +255,7 @@ def main(ready_event=None):
 
                 packet, dev = sock.recvfrom(RX_BUFFER_SIZE)
 
-                print("RX:", packet)
+                print(f"{Color.PURPLE}RX:{Color.ENDC}", packet)
 
                 # -- Reassembly ------------------------------------------------
 
@@ -294,7 +294,7 @@ def main(ready_event=None):
 
                     if all1_received:
                         if decoder.rcs_check(payload=decoded_schc_packet):
-                            print(f"   >>> RCS Check OK !!!")
+                            print(f"   {Color.BOLD}{Color.GREEN}>>> RCS Check OK !!!{Color.ENDC}")
                             stats_rcs_ok = True
 
                             if not is_retx:
@@ -306,7 +306,7 @@ def main(ready_event=None):
                         else: # Bad RCS
                             if not is_retx:
                                 # Send ACK with C=0
-                                print(f"   >>> Failed to decode. Sending ACK C=0...")
+                                print(f"   {Color.BOLD}{Color.YELLOW}>>> Failed RCS check. Sending ACK C=0...{Color.ENDC}")
                                 send_c0_ack(sock, received_frags)
                                 is_retx = True
                             else:
@@ -317,7 +317,7 @@ def main(ready_event=None):
                     if all1_received:
                         if not is_retx:
                             # Failed to decode; begin retransmissions
-                            print(f"   >>> Failed to decode. Sending ACK C=0...")
+                            print(f"   {Color.BOLD}{Color.YELLOW}>>> Failed to decode. Sending ACK C=0...{Color.ENDC}")
                             # How do we know if the device is not retransmitting more? Await a fake ACK-REQ from dev?
                             send_c0_ack(sock, received_frags)
                             is_retx = True
@@ -331,7 +331,7 @@ def main(ready_event=None):
                 print()
 
             except socket.timeout:
-                print("   Timeout reached - no more packets expected")
+                print(f"   {Color.BOLD}{Color.RED}Timeout reached{Color.ENDC} - no more packets expected")
                 break
             except Exception as e:
                 print(f"   Error receiving: {e}")
