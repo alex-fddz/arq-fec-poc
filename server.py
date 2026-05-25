@@ -55,35 +55,20 @@ class StreamDecoder:
             else False
         )
 
-    def is_decodeable(self):
+    def is_decodeable(self) -> bool:
         """Check k out of n in every encoded block of the C-Stream."""
 
         symbols_in_cstream = len(self.cstream.bitmap) * self.symbols_per_tile
-        trailing_symbols = symbols_in_cstream % self.n
 
-        # Defensive check: legitimate trailing symbols are strictly < k
-        if trailing_symbols >= self.k:
-            return False
-
-        full_blocks_end = symbols_in_cstream - trailing_symbols
-
-        # Check complete/full blocks
-        for block_start in range(0, full_blocks_end, self.n):
+        for block_start in range(0, symbols_in_cstream, self.n):
+            block_end = min(block_start + self.n, symbols_in_cstream)
             symbols_received = sum(
-                1 for s in range(block_start, block_start + self.n)
+                1 for s in range(block_start, block_end)
                 if self.symbol_received(s)
             )
             if symbols_received < self.k:
                 return False
 
-        # Trailing symbols have no parity; all must be present
-        if trailing_symbols > 0:
-            symbols_received = sum(
-                1 for s in range(full_blocks_end, symbols_in_cstream)
-                if self.symbol_received(s)
-            )
-            if (symbols_received < trailing_symbols):
-                return False
         return True
 
     def decode(self) -> bytes:
@@ -91,25 +76,25 @@ class StreamDecoder:
         Does not mutate the C-Stream. Returns reconstructed SCHC packet."""
 
         symbols_in_cstream = len(self.cstream.bitmap) * self.symbols_per_tile
-        full_blocks_end = symbols_in_cstream - (symbols_in_cstream % self.n)
-
         result = bytearray()
 
-        # Process complete blocks
-        for block_start in range(0, full_blocks_end, self.n):
+        for block_start in range(0, symbols_in_cstream, self.n):
+            block_end = min(block_start + self.n, symbols_in_cstream)
             present = [
-                s for s in range(block_start, block_start + self.n)
+                s for s in range(block_start, block_end)
                 if self.symbol_received(s)
             ]
 
-            # Append the k source symbols (positions block_start .. block_start+k-1)
+            # Append the k source symbols (block_start .. block_start+k-1)
             for src_pos in range(block_start, block_start + self.k):
+                if src_pos >= block_end:
+                    break
                 if src_pos in present:
                     start = src_pos * self.symbol_size_bytes
                     result.extend(
                         self.cstream.buffer[start:start + self.symbol_size_bytes]
                     )
-                else:
+                elif block_end - block_start == self.n:
                     # Recover via XOR of all present symbols
                     recovered = bytes(self.symbol_size_bytes)
                     for p in present:
