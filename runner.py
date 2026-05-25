@@ -38,14 +38,12 @@ def suppress_output():
 
 def run_server(ready_event, out):
     from server import main as server_main
-    with suppress_output():
-        out.append(server_main(ready_event=ready_event))
+    out.append(server_main(ready_event=ready_event))
 
 
 def run_device(out):
     from device import main as device_main
-    with suppress_output():
-        out.append(device_main())
+    out.append(device_main())
 
 
 def main():
@@ -58,7 +56,7 @@ def main():
 
         print(f"Running {SCENARIO_ITERATIONS} iterations...")
         for i in range(1, SCENARIO_ITERATIONS + 1):
-            print(f"  Iteration {i}/{SCENARIO_ITERATIONS}...", end=" ", flush=True)
+            print(f"  * {i}/{SCENARIO_ITERATIONS}...", end=" ", flush=True)
             t0 = time.perf_counter()
 
             ready_event = threading.Event()
@@ -69,17 +67,22 @@ def main():
             server_thread = threading.Thread(
                 target=run_server, args=(ready_event, server_out)
             )
-            server_thread.start()
+            device_thread = threading.Thread(target=run_device, args=(device_out,))
 
-            if not ready_event.wait(timeout=10):
+            timed_out = False
+
+            with suppress_output():
+                server_thread.start()
+                if not ready_event.wait(timeout=10):
+                    timed_out = True
+                else:
+                    device_thread.start()
+                    device_thread.join()
+                server_thread.join()
+
+            if timed_out:
                 print("TIMEOUT (server never ready)")
                 return
-
-            device_thread = threading.Thread(target=run_device, args=(device_out,))
-            device_thread.start()
-
-            device_thread.join()
-            server_thread.join()
 
             elapsed = time.perf_counter() - t0
 
@@ -100,6 +103,8 @@ def main():
             ])
 
             print(f"done ({elapsed:.2f}s)")
+
+        print(f"Statistics saved to {CSV_FILENAME}")
 
 
 if __name__ == "__main__":
