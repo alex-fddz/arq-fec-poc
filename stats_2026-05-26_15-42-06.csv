@@ -1,0 +1,11 @@
+iteration,timestamp,cfg_loss_probability,cfg_allow_all1_loss,dev_regular_count,dev_regular_tx_attempts,dev_regular_lost,dev_all1_lost,dev_c1_recvd,dev_c0_recvd,dev_ackreq_sent,dev_attempts,srv_regular_recvd,srv_all1_recvd,srv_c1_sent,srv_c0_sent,srv_ackreq_recvd,srv_retx_called,srv_decodeable_before_retx,srv_decodeable,srv_rcs_ok
+1,2026-05-26 15:42:15.250374,0.5,True,6,7,1,2,0,1,1,2,6,False,0,1,1,False,True,True,False
+2,2026-05-26 15:42:24.352735,0.5,True,6,10,6,2,0,1,1,2,4,False,0,1,1,False,True,True,False
+3,2026-05-26 15:42:33.463248,0.5,True,6,9,4,2,0,1,1,2,5,False,0,1,1,False,True,True,False
+4,2026-05-26 15:42:37.591962,0.5,True,6,9,4,1,0,1,1,2,5,True,1,1,1,False,True,True,True
+5,2026-05-26 15:42:46.714393,0.5,True,6,7,1,2,0,1,1,2,6,False,0,1,1,False,True,True,False
+6,2026-05-26 15:42:46.827786,0.5,True,6,6,1,0,1,0,0,1,5,True,1,0,0,False,True,True,True
+7,2026-05-26 15:42:46.930659,0.5,True,6,6,2,0,1,0,0,1,4,True,1,0,0,False,True,True,True
+8,2026-05-26 15:42:52.007261,0.5,True,6,11,9,0,0,1,0,1,2,True,0,1,0,True,False,False,False
+9,2026-05-26 15:42:52.110050,0.5,True,6,6,2,0,1,0,0,1,4,True,1,0,0,False,True,True,True
+10,2026-05-26 15:42:57.197428,0.5,True,6,11,8,0,0,1,0,1,3,True,0,1,0,True,False,False,False
