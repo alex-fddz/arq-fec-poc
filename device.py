@@ -404,15 +404,19 @@ def main():
     time.sleep(0.05) # Small delay to let server initialize
 
     # Initialize statistics
-    stats_total_regular = 0
-    stats_lost_regular = 0
-    stats_all1_lost = False
+    stats_regular_count = len(visual_procedure_fragments)
+    stats_regular_tx_attempts = 0
+    stats_regular_lost = 0
+    stats_all1_lost = 0
+    stats_c0_recvd = 0
+    stats_c1_recvd = 0
+    stats_ackreq_sent = 0
 
     def send_schc_fragments(frags_to_skip: list = []):
         """High level uplink function: Send Regular + All-1 Fragments."""
 
-        nonlocal stats_total_regular
-        nonlocal stats_lost_regular
+        nonlocal stats_regular_tx_attempts
+        nonlocal stats_regular_lost
         nonlocal stats_all1_lost
 
         for fragment in fragmenter.iter_fragments(
@@ -426,11 +430,11 @@ def main():
             if (w, fcn) in frags_to_skip:
                 continue
 
-            stats_total_regular += 1
+            stats_regular_tx_attempts += 1
 
             if is_packet_lost():
                 print(f"   {Color.RED}LOST {w}:{fcn}.{Color.ENDC}")
-                stats_lost_regular += 1
+                stats_regular_lost += 1
                 continue
 
             packet = fragmenter.new_fragment(w, fcn)
@@ -456,7 +460,7 @@ def main():
             return
         if ALLOW_ALL1_LOSS and is_packet_lost():
             print(f"   {Color.RED}LOST ALL-1.{Color.ENDC}")
-            stats_all1_lost = True
+            stats_all1_lost += 1
             return
 
         all1_packet = fragmenter.new_fragment(w=num_windows, fcn=WINDOW_SIZE)
@@ -477,7 +481,7 @@ def main():
 
     try:
         attempts = 0
-        MAX_ATTEMPTS = 2
+        MAX_ATTEMPTS = 2 # XXX: Move this to config; fix logic so it applies.
         while attempts < MAX_ATTEMPTS:
             try:
                 attempts += 1
@@ -485,10 +489,12 @@ def main():
 
                 if ack[0] == 0xFF: # C field
                     print(f"   {Color.GREEN}Got C=1{Color.ENDC}; All good!")
+                    stats_c1_recvd += 1
                     break
 
                 elif ack[0] == 0x00:
                     print(f"   {Color.BLUE}Got C=0{Color.ENDC}; Retransmitting...{Color.ENDC}")
+                    stats_c0_recvd += 1
                     recvd_frags = pickle.loads(ack[1:])
 
                     send_schc_fragments(frags_to_skip=recvd_frags)
@@ -507,6 +513,7 @@ def main():
                 # Send ACK-REQ
                 if attempts < MAX_ATTEMPTS:
                     print(f"   Sending {Color.BLUE}ACK-REQ{Color.ENDC}...")
+                    stats_ackreq_sent += 1
                     sock.sendto(bytes.fromhex("aa"), (IP_ADDR, APP_PORT))
                     time.sleep(0.01) # Small delay after Tx
                 else:
@@ -523,9 +530,15 @@ def main():
     # Return statistics
     return dict(
         loss_probability=LOSS_PROBABILITY,
-        total_regular=stats_total_regular,
-        lost_regular=stats_lost_regular,
+        allow_all1_lost=ALLOW_ALL1_LOSS,
+        regular_count=stats_regular_count,
+        regular_tx_attempts=stats_regular_tx_attempts,
+        regular_lost=stats_regular_lost,
         all1_lost=stats_all1_lost,
+        c1_recvd=stats_c1_recvd,
+        c0_recvd=stats_c0_recvd,
+        ackreq_sent=stats_ackreq_sent,
+        attempts=attempts
     )
 
 def is_packet_lost():

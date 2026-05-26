@@ -224,11 +224,15 @@ def main(ready_event=None):
 
     # Init Ack "bitmap"
     received_frags = set()
-    is_retx = False
+    retx_called = False
     all1_received = False
 
     # Initialize statistics
-    stats_regular_received = 0
+    stats_regular_recvd = 0
+    stats_c0_sent = 0
+    stats_c1_sent = 0
+    stats_ackreq_recvd = 0
+    stats_decodeable_before_retx = False
     stats_decodeable = False
     stats_rcs_ok = False
 
@@ -244,8 +248,10 @@ def main(ready_event=None):
 
                 # Handle ACK-REQ
                 if packet.hex() == "aa":
+                    stats_ackreq_recvd += 1
                     print("   ACK-REQ: Sending C0 ACK...")
                     send_c0_ack(sock, received_frags)
+                    stats_c0_sent += 1
                     continue
 
                 # -- Reassembly ------------------------------------------------
@@ -273,7 +279,7 @@ def main(ready_event=None):
                     print(f"   C-Stream> {cstream.buffer.hex()}")
                     bm = " ".join('1' if b else '0' for b in cstream.bitmap)
                     print(f"   Bitmap>   {bm}")
-                    stats_regular_received += 1
+                    stats_regular_recvd += 1
 
                 # -- Decoding --------------------------------------------------
 
@@ -281,6 +287,8 @@ def main(ready_event=None):
                     print("   ! C-Stream is decodeable !")
                     decoded_schc_packet = decoder.decode()
                     stats_decodeable = True
+                    if not retx_called:
+                        stats_decodeable_before_retx = True
                     print(f"   Decoded SCHC Packet = {decoded_schc_packet.hex()}.")
 
                     if all1_received:
@@ -288,30 +296,33 @@ def main(ready_event=None):
                             print(f"   {Color.BOLD}{Color.GREEN}>>> RCS Check OK !!!{Color.ENDC}")
                             stats_rcs_ok = True
 
-                            if not is_retx:
+                            if not retx_called:
                                 # Send ACK with C=1
                                 print("    Sending ACK C=1...")
                                 send_c1_ack(sock)
+                                stats_c1_sent += 1
                             break
 
                         else: # Bad RCS
-                            if not is_retx:
+                            if not retx_called:
                                 # Send ACK with C=0
                                 print(f"   {Color.BOLD}{Color.YELLOW}>>> Failed RCS check. Sending ACK C=0...{Color.ENDC}")
                                 send_c0_ack(sock, received_frags)
-                                is_retx = True
+                                stats_c0_sent += 1
+                                retx_called = True
                             else:
                                 # Decodeable, All1 received, Bad RCS, 2nd attempt:
                                 print(f"   > Current reassembly fails RCS; waiting for additional data...")
 
                 else: # Not decodeable
                     if all1_received:
-                        if not is_retx:
+                        if not retx_called:
                             # Failed to decode; begin retransmissions
                             print(f"   {Color.BOLD}{Color.YELLOW}>>> Failed to decode. Sending ACK C=0...{Color.ENDC}")
                             # How do we know if the device is not retransmitting more? Await a fake ACK-REQ from dev?
                             send_c0_ack(sock, received_frags)
-                            is_retx = True
+                            stats_c0_sent += 1
+                            retx_called = True
                         else:
                             # Not decodeable, All1 received, 2nd attempt.
                             print(f"   > Current reassembly not decodeable; waiting for additional data...")
@@ -336,8 +347,13 @@ def main(ready_event=None):
 
     # Return statistics
     return dict(
-        regular_received=stats_regular_received,
-        all1_received=all1_received,
+        regular_recvd=stats_regular_recvd,
+        all1_recvd=all1_received,
+        c1_sent=stats_c1_sent,
+        c0_sent=stats_c0_sent,
+        ackreq_recvd=stats_ackreq_recvd,
+        retx_called=retx_called,
+        decodeable_before_retx=stats_decodeable_before_retx,
         decodeable=stats_decodeable,
         rcs_ok=stats_rcs_ok,
     )
