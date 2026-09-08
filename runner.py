@@ -7,6 +7,7 @@ suppressing per-run output and writing a unified CSV dataset.
 
 import csv
 import os
+from pathlib import Path
 import threading
 import time
 from contextlib import contextmanager, redirect_stdout, redirect_stderr
@@ -14,7 +15,8 @@ from datetime import datetime
 
 from config import SCENARIO_ITERATIONS
 
-CSV_FILENAME = f'stats_{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}.csv'
+CSV_PATH = Path("data")
+CSV_FILENAME = CSV_PATH / f'stats_{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}.csv'
 CSV_HEADER = [
     "iteration",
     "timestamp",
@@ -58,6 +60,8 @@ def run_device(out):
 
 
 def main():
+    CSV_PATH.mkdir(parents=True, exist_ok=True)
+
     file_exists = os.path.isfile(CSV_FILENAME)
 
     with open(CSV_FILENAME, "a", newline="") as f:
