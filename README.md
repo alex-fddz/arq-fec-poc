@@ -19,3 +19,7 @@ python3 runner.py
 ```
 
 Runs the scenario `SCENARIO_ITERATIONS` times, suppressing output and writing one row per run to a timestamped CSV file. Device and server are synchronized via a `ready_event` so the port is bound before the device sends.
+
+## Analysis
+
+See [analysis.ipynb](./analysis.ipynb) (Jupyter Notebook) for stats and graphs.
