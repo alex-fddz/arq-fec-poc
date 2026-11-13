@@ -215,7 +215,8 @@ def main(ready_event=None):
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind((IP_ADDR, APP_PORT))
-    sock.settimeout(RX_TIMEOUT)  # Set timeout
+    # Inactivity timeout: must outlast all device retries (each waits RX_TIMEOUT - 1)
+    sock.settimeout(RX_TIMEOUT * MAX_ATTEMPTS)
 
     if ready_event is not None:
         ready_event.set()
@@ -235,6 +236,7 @@ def main(ready_event=None):
     stats_decodeable_before_retx = False
     stats_decodeable = False
     stats_rcs_ok = False
+    timed_out = False # Session ended by inactivity timeout (ARQ-FEC session failed)
 
     try:
 
@@ -246,23 +248,28 @@ def main(ready_event=None):
 
                 print(f"\n{Color.PURPLE}RX:{Color.ENDC}", packet)
 
-                # Handle ACK-REQ
-                if packet.hex() == "aa":
+                # Handle Sender-Abort
+                if packet.hex() == "ab":
+                    print(f"   {Color.RED}SENDER-ABORT{Color.ENDC} - device gave up")
+                    break
+
+                # Only the All-1 and ACK-REQ get an answer (C=1 or C=0)
+                is_ack_req = (packet.hex() == "aa")
+                is_all1 = False
+
+                if is_ack_req:
                     stats_ackreq_recvd += 1
-                    print("   ACK-REQ: Sending C0 ACK...")
-                    send_c0_ack(sock, received_frags)
-                    stats_c0_sent += 1
-                    continue
+                    print("   Received ACK-REQ.")
+                else:
+                    w, fcn, payload = reassembler.parse_fragment(packet)
+                    print(f"   w={w}, fcn={fcn}, payload={payload.hex()}")
+
+                    # Save for Ack "bitmap"
+                    received_frags.add((w, fcn))
+
+                    is_all1 = (fcn == reassembler.window_size)
 
                 # -- Reassembly ------------------------------------------------
-
-                w, fcn, payload = reassembler.parse_fragment(packet)
-                print(f"   w={w}, fcn={fcn}, payload={payload.hex()}")
-
-                # Save for Ack "bitmap"
-                received_frags.add((w, fcn))
-
-                is_all1 = (fcn == reassembler.window_size)
 
                 if is_all1:
                     print("   Received ALL-1 fragment.")
@@ -273,7 +280,7 @@ def main(ready_event=None):
                         reassembler.set_remaining_coding_bits(last_tiles)
                     decoder.all1_rcs = payload[-4:]
 
-                else:
+                elif not is_ack_req:
                     # Process regular fragments
                     reassembler.place_tiles(w, fcn, payload)
                     print(f"   C-Stream> {cstream.buffer.hex()}")
@@ -283,55 +290,44 @@ def main(ready_event=None):
 
                 # -- Decoding --------------------------------------------------
 
-                if decoder.is_decodeable():
+                decodeable = decoder.is_decodeable()
+                if decodeable:
                     print("   ! C-Stream is decodeable !")
-                    decoded_schc_packet = decoder.decode()
                     stats_decodeable = True
                     if not retx_called:
                         stats_decodeable_before_retx = True
+
+                # Regular fragments are not answered: wait for All-1 / ACK-REQ
+                if not (is_all1 or is_ack_req):
+                    continue
+
+                if decodeable and all1_received:
+                    decoded_schc_packet = decoder.decode()
                     print(f"   Decoded SCHC Packet = {decoded_schc_packet.hex()}.")
 
-                    if all1_received:
-                        if decoder.rcs_check(payload=decoded_schc_packet):
-                            print(f"   {Color.BOLD}{Color.GREEN}>>> RCS Check OK !!!{Color.ENDC}")
-                            stats_rcs_ok = True
+                    if decoder.rcs_check(payload=decoded_schc_packet):
+                        print(f"   {Color.BOLD}{Color.GREEN}>>> RCS Check OK !!!{Color.ENDC}")
+                        stats_rcs_ok = True
 
-                            if not retx_called:
-                                # Send ACK with C=1
-                                print("    Sending ACK C=1...")
-                                send_c1_ack(sock)
-                                stats_c1_sent += 1
-                            break
+                        # Send ACK with C=1 (also after retransmissions)
+                        print("    Sending ACK C=1...")
+                        send_c1_ack(sock)
+                        stats_c1_sent += 1
+                        break
 
-                        else: # Bad RCS
-                            if not retx_called:
-                                # Send ACK with C=0
-                                print(f"   {Color.BOLD}{Color.YELLOW}>>> Failed RCS check. Sending ACK C=0...{Color.ENDC}")
-                                send_c0_ack(sock, received_frags)
-                                stats_c0_sent += 1
-                                retx_called = True
-                            else:
-                                # Decodeable, All1 received, Bad RCS, 2nd attempt:
-                                print(f"   > Current reassembly fails RCS; waiting for additional data...")
+                    print(f"   {Color.BOLD}{Color.YELLOW}>>> Failed RCS check.{Color.ENDC}")
 
-                else: # Not decodeable
-                    if all1_received:
-                        if not retx_called:
-                            # Failed to decode; begin retransmissions
-                            print(f"   {Color.BOLD}{Color.YELLOW}>>> Failed to decode. Sending ACK C=0...{Color.ENDC}")
-                            # How do we know if the device is not retransmitting more? Await a fake ACK-REQ from dev?
-                            send_c0_ack(sock, received_frags)
-                            stats_c0_sent += 1
-                            retx_called = True
-                        else:
-                            # Not decodeable, All1 received, 2nd attempt.
-                            print(f"   > Current reassembly not decodeable; waiting for additional data...")
-
+                # Not decodeable (or bad RCS): ask for the missing fragments
+                print(f"   {Color.BOLD}{Color.YELLOW}>>> Sending ACK C=0...{Color.ENDC}")
+                send_c0_ack(sock, received_frags)
+                stats_c0_sent += 1
+                retx_called = True
 
                 # -- End of main loop ------------------------------------------
 
             except socket.timeout:
                 print(f"   {Color.BOLD}{Color.RED}Timeout reached{Color.ENDC} - no more packets expected")
+                timed_out = True
                 break
             except Exception as e:
                 print(f"   Error receiving: {e}")
@@ -356,6 +352,8 @@ def main(ready_event=None):
         decodeable_before_retx=stats_decodeable_before_retx,
         decodeable=stats_decodeable,
         rcs_ok=stats_rcs_ok,
+        timed_out=timed_out,
+        early_ack_sent=0, # No early ACK (W=1, C=1) in the stream geometry
     )
 
 if __name__ == "__main__":

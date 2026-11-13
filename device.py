@@ -411,13 +411,62 @@ def main():
     stats_c0_recvd = 0
     stats_c1_recvd = 0
     stats_ackreq_sent = 0
+    stats_attempts = 0      # All-1 + ACK-REQ sent (spec Attempts counter)
+    stats_aborted = False   # True if the device gave up (Sender-Abort)
+
+    def send_all1():
+        """Send the All-1 Fragment (simulating channel loss if allowed)."""
+
+        nonlocal stats_all1_lost
+        nonlocal stats_attempts
+
+        stats_attempts += 1
+
+        num_tiles = cstream_size // fragmenter.tile_size_bytes
+        num_windows = (num_tiles // WINDOW_SIZE) # W of last tile
+
+        if ALLOW_ALL1_LOSS and is_packet_lost():
+            print(f"   {Color.RED}LOST ALL-1.{Color.ENDC}")
+            stats_all1_lost += 1
+            return
+
+        all1_packet = fragmenter.new_fragment(w=num_windows, fcn=WINDOW_SIZE)
+        # Send remaining coding bits now (if any)
+        for i in range(-trailing_syms, 0):
+            all1_packet.extend(encoder.get_source_symbol(SCHC_PACKET, i))
+        rcs = fragmenter.calculate_crc32(data=SCHC_PACKET)
+        all1_packet.extend(rcs)
+
+        print(f"   {Color.BLUE}TX:{Color.ENDC}", all1_packet.hex())
+        sock.sendto(all1_packet, (IP_ADDR, APP_PORT))
+        time.sleep(0.01) # Small delay between fragments
+
+    def send_ack_req():
+        """Send an ACK-REQ (never lost), asking the server for an ACK."""
+
+        nonlocal stats_ackreq_sent
+        nonlocal stats_attempts
+
+        stats_attempts += 1
+        stats_ackreq_sent += 1
+        print(f"   Sending {Color.BLUE}ACK-REQ{Color.ENDC}...")
+        sock.sendto(bytes.fromhex("aa"), (IP_ADDR, APP_PORT))
+        time.sleep(0.01) # Small delay after Tx
+
+    def send_sender_abort():
+        """Give up: send a Sender-Abort (never lost) so the server stops waiting."""
+
+        nonlocal stats_aborted
+
+        stats_aborted = True
+        print(f"   {Color.RED}Sending SENDER-ABORT{Color.ENDC}")
+        sock.sendto(bytes.fromhex("ab"), (IP_ADDR, APP_PORT))
 
     def send_schc_fragments(frags_to_skip: list = []):
         """High level uplink function: Send Regular + All-1 Fragments."""
 
         nonlocal stats_regular_tx_attempts
         nonlocal stats_regular_lost
-        nonlocal stats_all1_lost
 
         for fragment in fragmenter.iter_fragments(
             cstream_size=cstream_size,
@@ -451,75 +500,53 @@ def main():
             sock.sendto(packet, (IP_ADDR, APP_PORT))
             time.sleep(0.01) # Small delay between fragments
 
-        # Send All-1
+        # Send All-1, unless the server already has it
         num_tiles = cstream_size // fragmenter.tile_size_bytes
         num_windows = (num_tiles // WINDOW_SIZE) # W of last tile
 
-        # Skip All-1 if it's not missing
-        if (num_windows, WINDOW_SIZE) in frags_to_skip:
-            return
-        if ALLOW_ALL1_LOSS and is_packet_lost():
-            print(f"   {Color.RED}LOST ALL-1.{Color.ENDC}")
-            stats_all1_lost += 1
-            return
-
-        all1_packet = fragmenter.new_fragment(w=num_windows, fcn=WINDOW_SIZE)
-        # Send remaining coding bits now (if any)
-        for i in range(-trailing_syms, 0):
-            all1_packet.extend(encoder.get_source_symbol(SCHC_PACKET, i))
-        rcs = fragmenter.calculate_crc32(data=SCHC_PACKET)
-        all1_packet.extend(rcs)
-
-        print(f"   {Color.BLUE}TX:{Color.ENDC}", all1_packet.hex())
-        sock.sendto(all1_packet, (IP_ADDR, APP_PORT))
-        time.sleep(0.01) # Small delay between fragments
+        if (num_windows, WINDOW_SIZE) not in frags_to_skip:
+            send_all1()
 
     send_schc_fragments()
 
-    # Now await ACK
+    # Now await ACK. Every All-1 or ACK-REQ sent is one attempt; the socket
+    # timeout (RX_TIMEOUT - 1) acts as the Retransmission Timer.
+    #   C=1     -> done
+    #   C=0     -> retransmit missing fragments, then send ACK-REQ
+    #   timeout -> resend All-1
+    # Once MAX_ATTEMPTS is reached, the device gives up (Sender-Abort).
     print(f"\n[8] Awaiting ACK...")
 
     try:
-        attempts = 0
-        MAX_ATTEMPTS = 2 # XXX: Move this to config; fix logic so it applies.
-        while attempts < MAX_ATTEMPTS:
+        while True:
             try:
-                attempts += 1
                 ack, addr = sock.recvfrom(1024)
-
-                if ack[0] == 0xFF: # C field
-                    print(f"   {Color.GREEN}Got C=1{Color.ENDC}; All good!")
-                    stats_c1_recvd += 1
-                    break
-
-                elif ack[0] == 0x00:
-                    print(f"   {Color.BLUE}Got C=0{Color.ENDC}; Retransmitting...{Color.ENDC}")
-                    stats_c0_recvd += 1
-                    recvd_frags = pickle.loads(ack[1:])
-
-                    send_schc_fragments(frags_to_skip=recvd_frags)
-
-                    # print(f"Awaiting ACK (2)...")
-                    # ack, addr = sock.recvfrom(1024)
-                    # if ack[0] == 0xFF: # C field
-                    #     print("2) All good!")
-                    # else:
-                    #     print("2) Well, I tried.")
-
-                    break # Only retransmit once.
-
             except socket.timeout:
                 print("   Timeout reached - no ack")
-                # Send ACK-REQ
-                if attempts < MAX_ATTEMPTS:
-                    print(f"   Sending {Color.BLUE}ACK-REQ{Color.ENDC}...")
-                    stats_ackreq_sent += 1
-                    sock.sendto(bytes.fromhex("aa"), (IP_ADDR, APP_PORT))
-                    time.sleep(0.01) # Small delay after Tx
+                if stats_attempts < MAX_ATTEMPTS:
+                    send_all1()
                 else:
+                    send_sender_abort()
                     break
-            except Exception as e:
-                print(f"   Error receiving: {e}")
+                continue
+
+            if ack[0] == 0xFF: # C field
+                print(f"   {Color.GREEN}Got C=1{Color.ENDC}; All good!")
+                stats_c1_recvd += 1
+                break
+
+            elif ack[0] == 0x00:
+                print(f"   {Color.BLUE}Got C=0{Color.ENDC}")
+                stats_c0_recvd += 1
+
+                if stats_attempts >= MAX_ATTEMPTS:
+                    send_sender_abort()
+                    break
+
+                print("   Retransmitting...")
+                recvd_frags = pickle.loads(ack[1:])
+                send_schc_fragments(frags_to_skip=recvd_frags)
+                send_ack_req()
 
     except Exception as e:
         print(f"   Error: {e}")
@@ -538,7 +565,8 @@ def main():
         c1_recvd=stats_c1_recvd,
         c0_recvd=stats_c0_recvd,
         ackreq_sent=stats_ackreq_sent,
-        attempts=attempts
+        attempts=stats_attempts,
+        aborted=stats_aborted,
     )
 
 def is_packet_lost():

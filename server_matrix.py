@@ -485,7 +485,8 @@ def main(ready_event=None):
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind((IP_ADDR, APP_PORT))
-    sock.settimeout(RX_TIMEOUT)  # Set timeout
+    # Inactivity timeout: must outlast all device retries (each waits RX_TIMEOUT - 1)
+    sock.settimeout(RX_TIMEOUT * MAX_ATTEMPTS)
 
     # Initialize Reassembler and Decoder
     reassembler = MatrixReassembler(
