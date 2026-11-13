@@ -16,7 +16,7 @@ from datetime import datetime
 from config import SCENARIO_ITERATIONS, MAX_ATTEMPTS, MTU_SIZE_BYTES, SCHC_PACKET
 
 CSV_PATH = Path("data")
-CSV_FILENAME = CSV_PATH / f'stats_{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}.csv'
+CSV_FILENAME = CSV_PATH / f'stats-stream_{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}.csv'
 CSV_HEADER = [
     "iteration",
     "timestamp",
