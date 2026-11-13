@@ -13,7 +13,7 @@ import time
 from contextlib import contextmanager, redirect_stdout, redirect_stderr
 from datetime import datetime
 
-from config_matrix import SCENARIO_ITERATIONS
+from config_matrix import SCENARIO_ITERATIONS, MAX_ATTEMPTS, MTU_SIZE_BYTES, SCHC_PACKET
 
 CSV_PATH = Path("data")
 CSV_FILENAME = CSV_PATH / f'stats-matrix_{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}.csv'
@@ -42,6 +42,9 @@ CSV_HEADER = [
     "dev_aborted",
     "srv_timed_out",
     "srv_early_ack_sent",
+    "cfg_max_attempts",
+    "cfg_mtu",
+    "cfg_packet_bytes",
 ]
 
 
@@ -132,6 +135,9 @@ def main():
                 device_stats.get("aborted"),
                 server_stats.get("timed_out"),
                 server_stats.get("early_ack_sent"),
+                MAX_ATTEMPTS,
+                MTU_SIZE_BYTES,
+                len(SCHC_PACKET),
             ])
 
             print(f"done ({elapsed:.2f}s)")
