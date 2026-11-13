@@ -16,7 +16,7 @@ from datetime import datetime
 from config_matrix import SCENARIO_ITERATIONS
 
 CSV_PATH = Path("data")
-CSV_FILENAME = CSV_PATH / f'stats_{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}.csv'
+CSV_FILENAME = CSV_PATH / f'stats-matrix_{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}.csv'
 CSV_HEADER = [
     "iteration",
     "timestamp",
@@ -39,6 +39,9 @@ CSV_HEADER = [
     "srv_decodeable_before_retx",
     "srv_decodeable",
     "srv_rcs_ok",
+    "dev_aborted",
+    "srv_timed_out",
+    "srv_early_ack_sent",
 ]
 
 
@@ -126,6 +129,9 @@ def main():
                 server_stats.get("decodeable_before_retx"),
                 server_stats.get("decodeable"),
                 server_stats.get("rcs_ok"),
+                device_stats.get("aborted"),
+                server_stats.get("timed_out"),
+                server_stats.get("early_ack_sent"),
             ])
 
             print(f"done ({elapsed:.2f}s)")

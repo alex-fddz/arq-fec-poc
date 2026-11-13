@@ -169,6 +169,12 @@ class MatrixFragmenter:
         self.stats_c0_recvd             = 0
         self.stats_c1_recvd             = 0
         self.stats_ackreq_sent          = 0
+        self.stats_attempts             = 0      # All-1 + ACK-REQ sent (spec Attempts counter)
+        self.stats_aborted              = False  # True if the device gave up (Sender-Abort)
+
+        # Retransmission Timer: shorter than the server's inactivity timeout (as in device.py)
+        self._retx_timeout              = RX_TIMEOUT - 1
+        self._retx_timer_start          = time.monotonic()
 
     def divide_encoded_schc_packet_into_tiles(self, encoded_schc_packet: list[bytes]):
 
@@ -181,9 +187,63 @@ class MatrixFragmenter:
             print("   Tile " + str(i+1) + ": " + " ".join(b.hex() for b in row)) 
 
         self._nFullTiles = len(self.tiles)
-        self._nWindows   = (self._nFullTiles + self.window_size - 1) // self.window_size 
+        self._nWindows   = (self._nFullTiles + self.window_size - 1) // self.window_size
+
+        # Number of Regular Fragments needed to send the whole encoded SCHC packet (as in device.py)
+        payload_available_in_bytes  = self._mtu - 1 - (self.w_field_size + self.fcn_field_size) // 8
+        tiles_per_fragment          = payload_available_in_bytes // self.tile_size_bytes
+        if tiles_per_fragment == 0:
+            raise ValueError(f"TILE_SIZE={self.tile_size_bytes} does not fit in MTU={self._mtu} (needs MTU >= TILE_SIZE + 2)")
+        self.stats_regular_count = math.ceil(self._nFullTiles / tiles_per_fragment)
 
         return self.tiles
+
+    def send_regular_fragment(self, packet: bytes):
+        """Send a Regular SCHC Fragment, simulating channel loss."""
+        self.stats_regular_tx_attempts += 1
+
+        if is_packet_lost():
+            print(f"   {Color.RED}LOST FRAG:{Color.ENDC}", packet.hex())
+            self.stats_regular_lost += 1
+            return
+
+        print(f"   {Color.BLUE}TX FRAG:{Color.ENDC}", packet.hex())
+        self.sock.sendto(packet, (IP_ADDR, APP_PORT))
+        time.sleep(0.01) # Small delay between fragments
+
+    def send_all1(self):
+        """Send the All-1 SCHC Fragment (simulating channel loss if allowed) and wait for an ACK."""
+        fcn_mask            = (1 << self.fcn_field_size) - 1
+        header_int          = (self._currentWindow << self.fcn_field_size) | (self.window_size & fcn_mask)
+        schc_header_all_1   = bytes([header_int])
+        residual            = b"".join(self.residual_coding_bits)
+        packet_all_1        = schc_header_all_1 + self._rcs + residual
+
+        self.stats_attempts     += 1
+        self._retx_timer_start  = time.monotonic()
+        self._current_state     = States.TX_WAIT_X_SESSION_ACK
+
+        if ALLOW_ALL1_LOSS and is_packet_lost():
+            print(f"   {Color.RED}LOST ALL1:{Color.ENDC}", packet_all_1.hex())
+            self.stats_all1_lost += 1
+            return
+
+        print(f"   {Color.BLUE}TX ALL1:{Color.ENDC}", packet_all_1.hex())
+        self.sock.sendto(packet_all_1, (IP_ADDR, APP_PORT))
+        time.sleep(0.01) # Small delay between fragments
+
+    def send_sender_abort(self):
+        """Give up: send a SCHC Sender-Abort (never lost) and stop the state machine."""
+        fcn_mask        = (1 << self.fcn_field_size) - 1
+        header_int      = (self._currentWindow << self.fcn_field_size) | fcn_mask
+        packet          = bytes([header_int])
+
+        print(f"   {Color.RED}TX SENDER-ABORT:{Color.ENDC}", packet.hex())
+        self.sock.sendto(packet, (IP_ADDR, APP_PORT))
+
+        self.stats_aborted      = True
+        self._current_state     = States.TX_END
+        self._running_machine   = False
 
     def run(self):
         """State Machine"""
@@ -215,9 +275,7 @@ class MatrixFragmenter:
                     packet          = schc_header + k_value + schc_payload
 
                     # Send this fragment to app. server
-                    print(f"   {Color.BLUE}TX FRAG:{Color.ENDC}", packet.hex())
-                    self.sock.sendto(packet, (IP_ADDR, APP_PORT))
-                    time.sleep(0.01) # Small delay between fragments
+                    self.send_regular_fragment(packet)
 
                     # Update tile, fcn, and window pointers
                     self._currentTile_ptr    = self._currentTile_ptr + n_tiles_to_send;
@@ -245,30 +303,27 @@ class MatrixFragmenter:
                     packet          = schc_header + k_value + schc_payload
 
                     # Send this fragment to app. server
-                    print(f"   {Color.BLUE}TX FRAG:{Color.ENDC}", packet.hex())
-                    self.sock.sendto(packet, (IP_ADDR, APP_PORT))
-                    self.stats_regular_count +=1
-                    time.sleep(0.01) # Small delay between fragments
+                    self.send_regular_fragment(packet)
 
                     # Update tile, fcn, and window pointers
                     self._currentTile_ptr    = self._currentTile_ptr + n_tiles_to_send;
                     self._currentFcn         = self._currentFcn - n_tiles_to_send;
 
                     # Sending All-1
-                    fcn_mask            = (1 << self.fcn_field_size) - 1
-                    header_int          = (self._currentWindow << self.fcn_field_size) | (self.window_size & fcn_mask)
-                    schc_header_all_1   = bytes([header_int])
-                    residual            = b"".join(self.residual_coding_bits)
-                    packet_all_1        = schc_header_all_1 + self._rcs + residual
-                    print(f"   {Color.BLUE}TX ALL1:{Color.ENDC}", packet_all_1.hex())
-                    self.sock.sendto(packet_all_1, (IP_ADDR, APP_PORT))
-                    time.sleep(0.01) # Small delay between fragments
+                    self.send_all1()
 
-                    self._current_state = States.TX_WAIT_X_SESSION_ACK
 
-                    
             elif self._current_state == States.TX_WAIT_X_SESSION_ACK:
                 time.sleep(0.1)
+
+                # Retransmission Timer expired without any ACK: resend All-1, or give up
+                if time.monotonic() - self._retx_timer_start > self._retx_timeout:
+                    print("   Timeout reached - no ack")
+                    if self.stats_attempts < MAX_ATTEMPTS:
+                        self.send_all1()
+                    else:
+                        self.send_sender_abort()
+                        break
 
 
             # Processes incoming messages
@@ -294,16 +349,7 @@ class MatrixFragmenter:
                         
                         if w==1 and c==1:
                             # Sending All-1
-                            fcn_mask            = (1 << self.fcn_field_size) - 1
-                            header_int          = (self._currentWindow << self.fcn_field_size) | (self.window_size & fcn_mask)
-                            schc_header_all_1   = bytes([header_int])
-                            residual            = b"".join(self.residual_coding_bits)
-                            packet_all_1        = schc_header_all_1 + self._rcs + residual
-                            print(f"   {Color.BLUE}TX ALL1:{Color.ENDC}", packet_all_1.hex())
-                            self.sock.sendto(packet_all_1, (IP_ADDR, APP_PORT))
-                            time.sleep(0.01) # Small delay between fragments
-
-                            self._current_state = States.TX_WAIT_X_SESSION_ACK
+                            self.send_all1()
 
                 elif self._current_state == States.TX_WAIT_X_SESSION_ACK:
                     msg_type = self.get_msg_type(data)
@@ -315,6 +361,11 @@ class MatrixFragmenter:
                             self._running_machine = False
                             
                         elif c==0:
+                            # Safeguard: no more retransmission rounds allowed
+                            if self.stats_attempts >= MAX_ATTEMPTS:
+                                self.send_sender_abort()
+                                return
+
                             ### Sending missing tiles #######
                             # Calculate how many tiles fit in a message
                             payload_available_in_bytes  = self._mtu - 1 - (self.w_field_size + self.fcn_field_size) // 8 
@@ -329,8 +380,10 @@ class MatrixFragmenter:
 
                             consecutivos, no_consecutivos = self.detect_consecutive(missed_tiles, payload_available_in_tiles)
 
+                            # Isolated tiles are sent alone, one tile per fragment
+                            groups_to_send = consecutivos + [[tile] for tile in no_consecutivos]
 
-                            for tiles_to_send in consecutivos:
+                            for tiles_to_send in groups_to_send:
                                 schc_payload = []
                                 temp_payload = []
                                 for tile in tiles_to_send:
@@ -348,9 +401,7 @@ class MatrixFragmenter:
                                 packet          = schc_header + k_value + schc_payload
 
                                 # Send this fragment to app. server
-                                print(f"   {Color.BLUE}TX FRAG:{Color.ENDC}", packet.hex())
-                                self.sock.sendto(packet, (IP_ADDR, APP_PORT))
-                                time.sleep(0.01) # Small delay between fragments
+                                self.send_regular_fragment(packet)
 
 
                             # Sending SCHC ACK REQ
@@ -364,14 +415,16 @@ class MatrixFragmenter:
                             # Send this fragment to app. server
                             print(f"   {Color.BLUE}TX ACK REQ:{Color.ENDC}", packet.hex())
                             self.stats_ackreq_sent += 1
+                            self.stats_attempts += 1
+                            self._retx_timer_start = time.monotonic()
                             self.sock.sendto(packet, (IP_ADDR, APP_PORT))
-                            time.sleep(0.01) # Small delay between fragments                          
+                            time.sleep(0.01) # Small delay between fragments
 
                             self._current_state = States.TX_WAIT_X_SESSION_ACK
 
 
-            except BlockingIOError:
-                pass  
+            except OSError: # e.g. BlockingIOError, or ConnectionRefusedError if the server is gone
+                pass
 
     def get_msg_type(self, data: bytes) -> int:
         """Get the message type based in the headers of the message"""
@@ -404,11 +457,18 @@ class MatrixFragmenter:
             c           = (schc_header >> (self.fcn_field_size-1)) & 1
 
             if c==1:
-                self.stats_c1_recvd += 1
+                # Only the end-of-session ACK (W=3) counts as C=1, as in device.py
+                if w==3:
+                    self.stats_c1_recvd += 1
                 return w, c
             else:
                 self.stats_c0_recvd += 1
-                schc_header_bitArray = BitArray(bytes=data)
+
+                # Windows not listed in this ACK have no missing tiles: forget previous bitmaps
+                unos = '1' * self.window_size
+                self.bitmap_array = [BitArray(bin=unos) for _ in range(2**self.w_field_size)]
+
+                schc_header_bitArray = BitArray(data)  # works on bitstring 4.x and 5.x
                 del schc_header_bitArray[self.w_field_size]
                 for bitmap in schc_header_bitArray.cut(self.w_field_size + self.window_size):
                     if len(bitmap) < self.w_field_size + self.window_size:
@@ -450,6 +510,8 @@ class MatrixFragmenter:
             self.stats_c0_recvd,
             self.stats_c1_recvd,
             self.stats_ackreq_sent,
+            self.stats_attempts,
+            self.stats_aborted,
         )
 
     def stop_socket(self):
@@ -510,7 +572,7 @@ def main():
     print(f"\n[5] Closing Socket")
     fragmenter.stop_socket()
 
-    [stats_regular_count, stats_regular_tx_attempts, stats_regular_lost, stats_all1_lost, stats_c0_recvd, stats_c1_recvd, stats_ackreq_sent] = fragmenter.get_stats()
+    [stats_regular_count, stats_regular_tx_attempts, stats_regular_lost, stats_all1_lost, stats_c0_recvd, stats_c1_recvd, stats_ackreq_sent, stats_attempts, stats_aborted] = fragmenter.get_stats()
 
     # Return statistics
     return dict(
@@ -523,8 +585,12 @@ def main():
         c1_recvd=stats_c1_recvd,
         c0_recvd=stats_c0_recvd,
         ackreq_sent=stats_ackreq_sent,
-        attempts=0
+        attempts=stats_attempts,
+        aborted=stats_aborted,
     )
+
+def is_packet_lost():
+    return int.from_bytes(os.urandom(4),'big')/0x100000000 < LOSS_PROBABILITY
 
 if __name__ == "__main__":
     main()

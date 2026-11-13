@@ -66,6 +66,7 @@ class MatrixReassembler:
         # Initialize statistics
         self.stats_regular_recvd    = 0
         self.stats_c1_sent          = 0
+        self.stats_early_ack_sent   = 0  # W=1, C=1 ACKs (matrix only)
         self.stats_c0_sent          = 0
         self.stats_ackreq_recvd     = 0
         self.stats_decodeable_before_retx = False
@@ -76,6 +77,10 @@ class MatrixReassembler:
         """Process messages."""
 
         type_msg = self.get_msg_type(data)
+
+        if type_msg == MsgType.SCHC_SenderAbort:
+            print(f"    {Color.RED}RX SENDER-ABORT{Color.ENDC} - device gave up")
+            return False
 
         if self._current_state == States.RX_INIT or self._current_state == States.RX_RCV_WINDOW:
 
@@ -88,10 +93,6 @@ class MatrixReassembler:
             # self._counter = self._counter + 1
 
             if type_msg == MsgType.SCHC_Fragment:
-
-                if self.is_packet_lost():
-                    print(f"   {Color.RED}LOST FRAG{Color.ENDC}")
-                    return True
 
                 self.stats_regular_recvd += 1
                 # Decoding message
@@ -120,20 +121,30 @@ class MatrixReassembler:
 
 
             elif type_msg == MsgType.SCHC_All1:
-                all1_received = True
+                self.all1_received = True
                 # Decoding message
                 w, fcn, k, payload_len, payload, recv_rcs = self.decode_msg(data, type_msg)
 
                 self._all_1_payload = payload
                 self._recv_rcs      = recv_rcs
 
+                # Safeguard: no Regular Fragment received yet, so k (and the C-matrix) is unknown.
+                # Nothing can be done; the device will resend the All-1 or give up.
+                if not self._cmatrix_initialised:
+                    print(f"   {Color.RED}No regular fragment received yet (k unknown){Color.ENDC}")
+                    return True
+
                 # Check if there are enough symbols
                 if self.check_enough_tiles(self._k):
-                    #print("Sending a SCHC ACK with W=3 and C=1")
-                    print(f"    {Color.RED}TX ACK :{Color.ENDC}")
-                    self.send_ack(3,1)
-                    self._current_state = States.RX_END
-                
+                    res = self.get_schc_packet(payload, recv_rcs)
+
+                    if res == True: # RCS is correct
+                        #print("Sending a SCHC ACK with W=3 and C=1")
+                        print(f"    {Color.RED}TX ACK :{Color.ENDC}")
+                        self.send_ack(3,1)
+                        self._current_state = States.RX_END
+                        return False
+
                 else:
                     self.get_bitmap()
                     #print("Sending a SCHC ACK with W=1 and C=0")
@@ -144,10 +155,11 @@ class MatrixReassembler:
         elif self._current_state == States.RX_WAIT_X_ALL1:
 
             if type_msg == MsgType.SCHC_Fragment:
+                self.stats_regular_recvd += 1
                 print("Discarting SCHC regular fragment message")
 
             elif type_msg == MsgType.SCHC_All1:
-                all1_received = True
+                self.all1_received = True
                 # Decoding message
                 w, fcn, k, payload_len, payload, recv_rcs = self.decode_msg(data, type_msg)
 
@@ -163,10 +175,11 @@ class MatrixReassembler:
                         print(f"    {Color.RED}TX ACK :{Color.ENDC}")
                         self.send_ack(3,1)
                         self._current_state = States.RX_END
+                        return False
 
         elif self._current_state == States.RX_WAIT_X_MISSING_FRAG:
-            if type_msg == MsgType.SCHC_Fragment:                                
-                self.stats_regular_recvd
+            if type_msg == MsgType.SCHC_Fragment:
+                self.stats_regular_recvd += 1
                 # Decoding message
                 w, fcn, k, payload_len, payload, extra = self.decode_msg(data, type_msg)
 
@@ -186,6 +199,7 @@ class MatrixReassembler:
 
 
             elif type_msg == MsgType.SCHC_AckReq:
+                self.stats_ackreq_recvd += 1
                 # Check if there are enough symbols
                 if self.check_enough_tiles(self._k):
                     # Extract
@@ -299,6 +313,9 @@ class MatrixReassembler:
 
     def check_enough_tiles(self, k) -> bool:
         if self._cmatrix_validator.count(1) >= k:
+            self.stats_decodeable = True
+            if not self.retx_called:
+                self.stats_decodeable_before_retx = True
             return True
         else:
             return False
@@ -371,13 +388,7 @@ class MatrixReassembler:
         print("   RCS CAL: ", cal_rcs.hex(' ').upper()) 
 
         if cal_rcs == rcs:
-            if self.retx_called == False:
-                self.stats_decodeable_before_retx = True
-            
-            self.stats_decodeable   = True
             self.stats_rcs_ok       = True
-
-
             return True
         else:
             return False
@@ -391,7 +402,11 @@ class MatrixReassembler:
     def send_ack(self, w: int, c: int):
         """Helper to send C=1 Ack."""
         if c==1:
-            self.stats_c1_sent += 1
+            # W=3: end-of-session ACK (same as C=1 in server.py). W=1: matrix-only early ACK
+            if w==3:
+                self.stats_c1_sent += 1
+            else:
+                self.stats_early_ack_sent += 1
             byte_val = (w << 3) | (c << 2) | 0b11
             msg = bytes([byte_val])
 
@@ -428,6 +443,8 @@ class MatrixReassembler:
         # Convertir a bytes y enviar por UDP
         compound_ack_bytes = compound_ack.bytes
         self._socket.sendto(compound_ack_bytes, (IP_ADDR, DEV_PORT))
+        self.stats_c0_sent += 1
+        self.retx_called = True
         time.sleep(0.01)  # Small delay after Tx
 
     def get_stats(self):
@@ -441,9 +458,14 @@ class MatrixReassembler:
             self.stats_decodeable_before_retx,
             self.stats_decodeable,
             self.stats_rcs_ok,
+            self.stats_early_ack_sent,
         )
 
     def get_bitmap(self):
+
+        # Start from "all received", then mark the tiles still missing
+        unos = '1' * self._window_size
+        self.bitmap_array = [BitArray(bin=unos) for _ in range(2**self._w_field_size)]
 
         for posicion, ind in enumerate(self._cmatrix_validator):
             if ind == 0:
@@ -451,13 +473,10 @@ class MatrixReassembler:
                 fcn = (math.floor((posicion)/self._window_size) + 1) * self._window_size - (posicion + 1)
                 self.bitmap_array[w][self._window_size - 1 - fcn] = 0
 
-    def is_packet_lost(self):
-        return int.from_bytes(os.urandom(4),'big')/0x100000000 < LOSS_PROBABILITY
-
 def main(ready_event=None):
     """Main function for the ARQ-FEC application server (receiver)."""
 
-    print(f"{Color.PURPLE}ARQ-FEC App Server (Receiver) - Stream Encoding Geometry{Color.ENDC}")
+    print(f"{Color.PURPLE}ARQ-FEC App Server (Receiver) - Matrix Encoding Geometry{Color.ENDC}")
     print(Color.PURPLE, "=" * 52, Color.ENDC)
 
 
@@ -484,6 +503,7 @@ def main(ready_event=None):
 
     print(f"{Color.PURPLE}Listening on {IP_ADDR}:{APP_PORT}...{Color.ENDC}")
 
+    timed_out = False # Session ended by inactivity timeout (ARQ-FEC session failed)
 
     try:
 
@@ -501,6 +521,7 @@ def main(ready_event=None):
 
             except socket.timeout:
                 print(f"   {Color.BOLD}{Color.RED}Timeout reached{Color.ENDC} - no more packets expected")
+                timed_out = True
                 break
             except Exception as e:
                 print(f"   Error receiving: {e}")
@@ -514,7 +535,7 @@ def main(ready_event=None):
         sock.close()
         print("\nServer shutting down...")
 
-    stats_regular_recvd, all1_received, stats_c1_sent, stats_c0_sent, stats_ackreq_recvd, retx_called, stats_decodeable_before_retx, stats_decodeable, stats_rcs_ok = reassembler.get_stats()
+    stats_regular_recvd, all1_received, stats_c1_sent, stats_c0_sent, stats_ackreq_recvd, retx_called, stats_decodeable_before_retx, stats_decodeable, stats_rcs_ok, stats_early_ack_sent = reassembler.get_stats()
 
     # Return statistics
     return dict(
@@ -527,6 +548,8 @@ def main(ready_event=None):
         decodeable_before_retx=stats_decodeable_before_retx,
         decodeable=stats_decodeable,
         rcs_ok=stats_rcs_ok,
+        timed_out=timed_out,
+        early_ack_sent=stats_early_ack_sent,
     )
 
 if __name__ == "__main__":

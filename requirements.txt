@@ -2,3 +2,5 @@ pandas>=1.5
 numpy>=1.23
 matplotlib>=3.6
 seaborn>=0.12
+reedsolo>=1.7
+bitstring>=4.0         # tested with 4.4 and 5.0
