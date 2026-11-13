@@ -423,7 +423,7 @@ def main():
         stats_attempts += 1
 
         num_tiles = cstream_size // fragmenter.tile_size_bytes
-        num_windows = (num_tiles // WINDOW_SIZE) # W of last tile
+        num_windows = (num_tiles - 1) // WINDOW_SIZE # W of last tile
 
         if ALLOW_ALL1_LOSS and is_packet_lost():
             print(f"   {Color.RED}LOST ALL-1.{Color.ENDC}")
@@ -502,7 +502,7 @@ def main():
 
         # Send All-1, unless the server already has it
         num_tiles = cstream_size // fragmenter.tile_size_bytes
-        num_windows = (num_tiles // WINDOW_SIZE) # W of last tile
+        num_windows = (num_tiles - 1) // WINDOW_SIZE # W of last tile
 
         if (num_windows, WINDOW_SIZE) not in frags_to_skip:
             send_all1()

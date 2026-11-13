@@ -188,6 +188,7 @@ class MatrixFragmenter:
 
         self._nFullTiles = len(self.tiles)
         self._nWindows   = (self._nFullTiles + self.window_size - 1) // self.window_size
+        self._lastWindow = (self._nFullTiles - 1) // self.window_size  # W of the last tile (used in All-1 and ACK REQ)
 
         # Number of Regular Fragments needed to send the whole encoded SCHC packet (as in device.py)
         payload_available_in_bytes  = self._mtu - 1 - (self.w_field_size + self.fcn_field_size) // 8
@@ -214,7 +215,7 @@ class MatrixFragmenter:
     def send_all1(self):
         """Send the All-1 SCHC Fragment (simulating channel loss if allowed) and wait for an ACK."""
         fcn_mask            = (1 << self.fcn_field_size) - 1
-        header_int          = (self._currentWindow << self.fcn_field_size) | (self.window_size & fcn_mask)
+        header_int          = (self._lastWindow << self.fcn_field_size) | (self.window_size & fcn_mask)
         schc_header_all_1   = bytes([header_int])
         residual            = b"".join(self.residual_coding_bits)
         packet_all_1        = schc_header_all_1 + self._rcs + residual
@@ -234,8 +235,9 @@ class MatrixFragmenter:
 
     def send_sender_abort(self):
         """Give up: send a SCHC Sender-Abort (never lost) and stop the state machine."""
+        w_mask          = (1 << self.w_field_size) - 1
         fcn_mask        = (1 << self.fcn_field_size) - 1
-        header_int      = (self._currentWindow << self.fcn_field_size) | fcn_mask
+        header_int      = (w_mask << self.fcn_field_size) | fcn_mask  # W all ones, FCN all ones (RFC 8724)
         packet          = bytes([header_int])
 
         print(f"   {Color.RED}TX SENDER-ABORT:{Color.ENDC}", packet.hex())
@@ -392,7 +394,6 @@ class MatrixFragmenter:
                                 # Prepare SCHC regular fragment    
                                 schc_payload = b''.join(byte for sublista in temp_payload for byte in sublista)
                                 w   = math.floor((tiles_to_send[0])/self.window_size)
-                                self._currentWindow = w
                                 fcn = (math.floor((tiles_to_send[0])/self.window_size) + 1) * self.window_size - (tiles_to_send[0] + 1)       
                                 fcn_mask        = (1 << self.fcn_field_size) - 1
                                 header_int      = (w << self.fcn_field_size) | (fcn & fcn_mask)
@@ -405,7 +406,7 @@ class MatrixFragmenter:
 
 
                             # Sending SCHC ACK REQ
-                            w   = self._currentWindow
+                            w   = self._lastWindow
                             fcn = 0       
                             fcn_mask        = (1 << self.fcn_field_size) - 1
                             header_int      = (w << self.fcn_field_size) | (fcn & fcn_mask)

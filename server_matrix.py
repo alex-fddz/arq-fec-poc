@@ -197,6 +197,14 @@ class MatrixReassembler:
                 tiles = [payload[i : i + self._tile_size_bytes] for i in range(0, payload_len, self._tile_size_bytes)]
                 self.save_tiles_in_cmatrix(tiles, w, fcn)
 
+                # Enough symbols now: send the session ACK right away (receiver FSM in the draft)
+                if self.check_enough_tiles(self._k):
+                    res = self.get_schc_packet(self._all_1_payload, self._recv_rcs)
+
+                    if res == True: # RCS is correct
+                        print(f"    {Color.RED}TX ACK :{Color.ENDC}")
+                        self.send_ack(3,1)
+                        return False
 
             elif type_msg == MsgType.SCHC_AckReq:
                 self.stats_ackreq_recvd += 1
@@ -407,7 +415,7 @@ class MatrixReassembler:
                 self.stats_c1_sent += 1
             else:
                 self.stats_early_ack_sent += 1
-            byte_val = (w << 3) | (c << 2) | 0b11
+            byte_val = (w << 3) | (c << 2)  # W | C=1 | padding (zeros)
             msg = bytes([byte_val])
 
 
@@ -435,10 +443,11 @@ class MatrixReassembler:
                 # Añadimos el bitmap en ambos casos
                 compound_ack.append(bitmap)                
 
-        # Rellenar con unos ('1') para que el largo sea múltiplo de 8
+        # Pad with zeros to a multiple of 8 (RFC 9441: an M-bit zero terminator, if it fits,
+        # followed by zero padding, so all padding bits are 0)
         bits_faltantes = (8 - (len(compound_ack) % 8)) % 8
         if bits_faltantes > 0:
-            compound_ack.append(BitArray(bin='1' * bits_faltantes))
+            compound_ack.append(BitArray(bin='0' * bits_faltantes))
 
         # Convertir a bytes y enviar por UDP
         compound_ack_bytes = compound_ack.bytes

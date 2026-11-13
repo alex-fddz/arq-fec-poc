@@ -297,8 +297,10 @@ def main(ready_event=None):
                     if not retx_called:
                         stats_decodeable_before_retx = True
 
-                # Regular fragments are not answered: wait for All-1 / ACK-REQ
-                if not (is_all1 or is_ack_req):
+                # Regular fragments are not answered, except a retransmitted one
+                # that completes decoding (C=1 sent right away, as in the draft)
+                is_retx_frag = retx_called and not (is_all1 or is_ack_req)
+                if not (is_all1 or is_ack_req or is_retx_frag):
                     continue
 
                 if decodeable and all1_received:
@@ -316,6 +318,10 @@ def main(ready_event=None):
                         break
 
                     print(f"   {Color.BOLD}{Color.YELLOW}>>> Failed RCS check.{Color.ENDC}")
+
+                # A retransmitted fragment that does not complete decoding: wait for the ACK-REQ
+                if is_retx_frag:
+                    continue
 
                 # Not decodeable (or bad RCS): ask for the missing fragments
                 print(f"   {Color.BOLD}{Color.YELLOW}>>> Sending ACK C=0...{Color.ENDC}")
