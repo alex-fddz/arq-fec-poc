@@ -127,11 +127,16 @@ class MatrixReassembler:
 
                 self._all_1_payload = payload
                 self._recv_rcs      = recv_rcs
+                self._last_window   = w
 
-                # Safeguard: no Regular Fragment received yet, so k (and the C-matrix) is unknown.
-                # Nothing can be done; the device will resend the All-1 or give up.
+                # No Regular Fragment received yet, so k (and the C-matrix) is unknown.
+                # RFC 9441: the All-1 must still be answered -> report every tile as missing.
                 if not self._cmatrix_initialised:
                     print(f"   {Color.RED}No regular fragment received yet (k unknown){Color.ENDC}")
+                    self.get_bitmap_all_missing(self._last_window)
+                    print(f"    {Color.RED}TX ACK :{Color.ENDC}")
+                    self.send_c0_ack()
+                    self._current_state = States.RX_WAIT_X_MISSING_FRAG
                     return True
 
                 # Check if there are enough symbols
@@ -208,6 +213,14 @@ class MatrixReassembler:
 
             elif type_msg == MsgType.SCHC_AckReq:
                 self.stats_ackreq_recvd += 1
+
+                # Still no Regular Fragment (all retransmissions lost): ask again for every tile
+                if not self._cmatrix_initialised:
+                    self.get_bitmap_all_missing(self._last_window)
+                    print(f"    {Color.RED}TX ACK :{Color.ENDC}")
+                    self.send_c0_ack()
+                    return True
+
                 # Check if there are enough symbols
                 if self.check_enough_tiles(self._k):
                     # Extract
@@ -481,6 +494,15 @@ class MatrixReassembler:
                 w   = math.floor((posicion)/self._window_size)
                 fcn = (math.floor((posicion)/self._window_size) + 1) * self._window_size - (posicion + 1)
                 self.bitmap_array[w][self._window_size - 1 - fcn] = 0
+
+    def get_bitmap_all_missing(self, last_window: int):
+        """k unknown: mark every tile of windows 0..last_window (W of the All-1) as missing."""
+        unos  = '1' * self._window_size
+        ceros = '0' * self._window_size
+        self.bitmap_array = [BitArray(bin=unos) for _ in range(2**self._w_field_size)]
+
+        for w in range(last_window + 1):
+            self.bitmap_array[w] = BitArray(bin=ceros)
 
 def main(ready_event=None):
     """Main function for the ARQ-FEC application server (receiver)."""

@@ -377,8 +377,10 @@ class MatrixFragmenter:
                             missed_tiles = []
                             for w, bitmap in enumerate(self.bitmap_array):
                                 for pos,tail in enumerate(bitmap):
-                                    if tail == 0:
-                                        missed_tiles.append(w*self.window_size + pos)
+                                    tile_idx = w*self.window_size + pos
+                                    # Ignore positions past the last tile (a receiver that does not know k reports whole windows)
+                                    if tail == 0 and tile_idx < self._nFullTiles:
+                                        missed_tiles.append(tile_idx)
 
                             consecutivos, no_consecutivos = self.detect_consecutive(missed_tiles, payload_available_in_tiles)
 
