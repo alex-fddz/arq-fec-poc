@@ -172,7 +172,7 @@ class MatrixFragmenter:
         self.stats_attempts             = 0      # All-1 + ACK-REQ sent (spec Attempts counter)
         self.stats_aborted              = False  # True if the device gave up (Sender-Abort)
 
-        # Retransmission Timer: shorter than the server's inactivity timeout (as in device.py)
+        # Retransmission Timer: shorter than the server's inactivity timeout (as in device_stream.py)
         self._retx_timeout              = RX_TIMEOUT - 1
         self._retx_timer_start          = time.monotonic()
 
@@ -190,7 +190,7 @@ class MatrixFragmenter:
         self._nWindows   = (self._nFullTiles + self.window_size - 1) // self.window_size
         self._lastWindow = (self._nFullTiles - 1) // self.window_size  # W of the last tile (used in All-1 and ACK REQ)
 
-        # Number of Regular Fragments needed to send the whole encoded SCHC packet (as in device.py)
+        # Number of Regular Fragments needed to send the whole encoded SCHC packet (as in device_stream.py)
         payload_available_in_bytes  = self._mtu - 1 - (self.w_field_size + self.fcn_field_size) // 8
         tiles_per_fragment          = payload_available_in_bytes // self.tile_size_bytes
         if tiles_per_fragment == 0:
@@ -460,7 +460,7 @@ class MatrixFragmenter:
             c           = (schc_header >> (self.fcn_field_size-1)) & 1
 
             if c==1:
-                # Only the end-of-session ACK (W=3) counts as C=1, as in device.py
+                # Only the end-of-session ACK (W=3) counts as C=1, as in device_stream.py
                 if w==3:
                     self.stats_c1_recvd += 1
                 return w, c

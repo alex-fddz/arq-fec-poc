@@ -212,7 +212,7 @@ def main(ready_event=None):
                         stats_decodeable_before_retx = True
 
                 # Regular fragments are not answered, except a retransmitted one
-                # that completes the packet (C=1 sent right away, as in server.py)
+                # that completes the packet (C=1 sent right away, as in server_stream.py)
                 is_retx_frag = retx_called and not (is_all1 or is_ack_req)
 
                 if complete:

@@ -56,12 +56,12 @@ def suppress_output():
 
 
 def run_server(ready_event, out):
-    from server import main as server_main
+    from server_stream import main as server_main
     out.append(server_main(ready_event=ready_event))
 
 
 def run_device(out):
-    from device import main as device_main
+    from device_stream import main as device_main
     out.append(device_main())
 
 

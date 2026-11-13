@@ -423,7 +423,7 @@ class MatrixReassembler:
     def send_ack(self, w: int, c: int):
         """Helper to send C=1 Ack."""
         if c==1:
-            # W=3: end-of-session ACK (same as C=1 in server.py). W=1: matrix-only early ACK
+            # W=3: end-of-session ACK (same as C=1 in server_stream.py). W=1: matrix-only early ACK
             if w==3:
                 self.stats_c1_sent += 1
             else:
