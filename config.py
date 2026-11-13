@@ -21,6 +21,6 @@ DEV_PORT = 5004               # UDP port for Device
 APP_PORT = 5005               # UDP port for App Server
 RX_TIMEOUT = 5                # Device retry timer = RX_TIMEOUT - 1; server inactivity = RX_TIMEOUT * MAX_ATTEMPTS
 RX_BUFFER_SIZE = MTU_SIZE_BYTES # Server reception buffer size
-MAX_ATTEMPTS = 2              # Max All-1 + ACK-REQ sent by the device before giving up (Sender-Abort)
+MAX_ATTEMPTS = 3              # Max All-1 + ACK-REQ sent by the device before giving up (Sender-Abort)
 
 SCENARIO_ITERATIONS = 10      # Times to run the scenario automatically
